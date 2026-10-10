@@ -1,0 +1,9 @@
+# Runtime dependencies for the Vercel Python function (api/index.py + weather_logic.py).
+# Keep this list minimal: Vercel enforces a bundle-size limit on Python functions.
+fastapi
+requests
+pytz
+reportlab
+matplotlib
+pillow
+xlsxwriter

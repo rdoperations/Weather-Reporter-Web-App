@@ -1,0 +1,15 @@
+{
+  "functions": {
+    "api/index.py": {
+      "maxDuration": 60,
+      "memory": 1024,
+      "includeFiles": "{weather_logic.py,locations.json,location.json,NotoSans-*.ttf,Pictures/**}"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/index.py"
+    }
+  ]
+}

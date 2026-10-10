@@ -1,0 +1,13 @@
+# Keep deployment uploads small: reports, legacy app and local artefacts are not needed.
+*.pdf
+__pycache__/
+**/__pycache__/
+node_modules/
+.next/
+dist/
+build/
+streamlit_legacy/
+Old reports & spare fonts/
+.git_log_tmp.txt
+tracked_files.txt
+markdowns.txt

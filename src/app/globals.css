@@ -1,0 +1,170 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-sans: var(--font-inter), system-ui, -apple-system, sans-serif;
+    --font-mono: var(--font-jetbrains-mono), monospace;
+  }
+
+  body {
+    background: linear-gradient(135deg, #000000 0%, #00083a 50%, #000B58 100%);
+    background-attachment: fixed;
+    color: #d1d9e6;
+    font-family: var(--font-sans);
+    min-height: 100vh;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-sans);
+    color: #e8f0fe;
+  }
+}
+
+/* ─── Streamlit Exact Design System ─── */
+.btn-primary {
+  background: linear-gradient(135deg, #0072ff, #00c6ff);
+  color: white;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  font-family: var(--font-sans);
+  font-weight: 600;
+  transition: all 0.2s ease-out;
+  cursor: pointer;
+}
+
+.btn-primary:hover {
+  background: linear-gradient(135deg, #005bcc, #00a3cc) !important;
+  border: 1px solid #00c6ff !important;
+  color: white !important;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(0, 114, 255, 0.35);
+}
+
+.glass-card {
+  background: rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  padding: 22px 20px;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.glass-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 32px rgba(0, 114, 255, 0.15);
+  border-color: rgba(0, 198, 255, 0.2);
+}
+
+.card-label {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: #8fa6c0;
+  text-align: center;
+  margin-bottom: 4px;
+}
+
+.card-value {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 700;
+  color: #e8f0fe;
+  text-align: center;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: #e8f0fe;
+  margin-top: 36px;
+  margin-bottom: 18px;
+  padding-bottom: 10px;
+  border-bottom: 2px solid rgba(0, 114, 255, 0.25);
+}
+
+.section-header svg {
+  width: 26px;
+  height: 26px;
+  color: #00c6ff;
+  flex-shrink: 0;
+}
+
+.gradient-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(0, 198, 255, 0.35), transparent);
+  margin: 36px 0;
+  border: none;
+}
+
+.weather-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 18px;
+  border-radius: 24px;
+  background: rgba(0, 200, 255, 0.08);
+  border: 1px solid rgba(0, 200, 255, 0.18);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 500;
+  color: #a0d8ff;
+}
+
+.weather-badge .live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #00c6ff;
+  animation: dot-blink 2s ease-in-out infinite;
+}
+
+@keyframes dot-blink {
+  0%, 100% { opacity: 1; box-shadow: 0 0 6px #00c6ff; }
+  50% { opacity: 0.3; box-shadow: none; }
+}
+
+.export-card {
+  background: rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  padding: 20px;
+}
+
+.export-card-title {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: 16px;
+  color: #e8f0fe;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.export-card-title svg {
+  width: 20px;
+  height: 20px;
+  color: #00c6ff;
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.25);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 198, 255, 0.25);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 198, 255, 0.45);
+}
