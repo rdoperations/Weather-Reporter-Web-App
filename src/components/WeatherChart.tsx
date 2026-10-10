@@ -267,7 +267,10 @@ function TimeSeriesChart({ rows, tab }: { rows: Row[]; tab: TabDef }) {
         return { min: Math.floor(lo - sp * 0.5), max: Math.ceil(hi + sp * 0.5) };
       }
       const pad = hi - lo > 0 ? (hi - lo) * 0.15 : 2;
-      return { min: Math.floor(lo - pad), max: Math.ceil(hi + pad) };
+      return {
+        min: lo < 0 ? Math.floor(lo - pad) : 0,
+        max: Math.ceil(Math.max(hi + pad, 2)),
+      };
     };
 
     return {
@@ -293,21 +296,70 @@ function TimeSeriesChart({ rows, tab }: { rows: Row[]; tab: TabDef }) {
     return segments;
   };
 
-  // Catmull-Rom → cubic Bézier, control points clamped so the curve can't leave the plot.
+  // Monotone cubic Hermite interpolation (Fritsch-Carlson).
+  // Guaranteed no overshoot at local extrema (rain peaks) and preserves flat plateaus.
   const splinePath = (pts: XY[]): string => {
-    const f = (n: number) => n.toFixed(1);
-    if (pts.length === 1) return `M ${f(pts[0].x)} ${f(pts[0].y)}`;
-    let d = `M ${f(pts[0].x)} ${f(pts[0].y)}`;
-    if (pts.length === 2) return `${d} L ${f(pts[1].x)} ${f(pts[1].y)}`;
+    const n = pts.length;
+    if (n === 0) return "";
+    const f = (val: number) => val.toFixed(1);
+    if (n === 1) return `M ${f(pts[0].x)} ${f(pts[0].y)}`;
+    if (n === 2) return `M ${f(pts[0].x)} ${f(pts[0].y)} L ${f(pts[1].x)} ${f(pts[1].y)}`;
+
+    // 1. Calculate secant slopes between adjacent points
+    const dx: number[] = new Array(n - 1);
+    const dy: number[] = new Array(n - 1);
+    const slopes: number[] = new Array(n - 1);
+    for (let i = 0; i < n - 1; i++) {
+      dx[i] = pts[i + 1].x - pts[i].x;
+      dy[i] = pts[i + 1].y - pts[i].y;
+      slopes[i] = dx[i] !== 0 ? dy[i] / dx[i] : 0;
+    }
+
+    // 2. Initialize tangents at each point
+    const m: number[] = new Array(n);
+    m[0] = slopes[0];
+    m[n - 1] = slopes[n - 2];
+    for (let i = 1; i < n - 1; i++) {
+      const s0 = slopes[i - 1];
+      const s1 = slopes[i];
+      if (s0 * s1 <= 0) {
+        // Local extremum (peak or valley) or plateau: tangent must be horizontal
+        m[i] = 0;
+      } else {
+        // Harmonic mean of adjacent slopes
+        m[i] = (2 * s0 * s1) / (s0 + s1);
+      }
+    }
+
+    // 3. Fritsch-Carlson monotonicity condition
+    for (let i = 0; i < n - 1; i++) {
+      if (slopes[i] === 0) {
+        m[i] = 0;
+        m[i + 1] = 0;
+      } else {
+        const alpha = m[i] / slopes[i];
+        const beta = m[i + 1] / slopes[i];
+        const dist = Math.hypot(alpha, beta);
+        if (dist > 3) {
+          const tau = 3 / dist;
+          m[i] = tau * alpha * slopes[i];
+          m[i + 1] = tau * beta * slopes[i];
+        }
+      }
+    }
+
+    // 4. Construct SVG path using cubic Bézier segments
     const clampY = (y: number) => Math.max(padding.top, Math.min(baseY, y));
-    for (let i = 0; i < pts.length - 1; i++) {
-      const p0 = pts[Math.max(0, i - 1)];
+    let d = `M ${f(pts[0].x)} ${f(pts[0].y)}`;
+    for (let i = 0; i < n - 1; i++) {
       const p1 = pts[i];
       const p2 = pts[i + 1];
-      const p3 = pts[Math.min(pts.length - 1, i + 2)];
-      const cp1y = clampY(p1.y + (p2.y - p0.y) / 6);
-      const cp2y = clampY(p2.y - (p3.y - p1.y) / 6);
-      d += ` C ${f(p1.x + (p2.x - p0.x) / 6)} ${f(cp1y)}, ${f(p2.x - (p3.x - p1.x) / 6)} ${f(cp2y)}, ${f(p2.x)} ${f(p2.y)}`;
+      const segDx = dx[i] / 3;
+      const cp1x = p1.x + segDx;
+      const cp1y = clampY(p1.y + m[i] * segDx);
+      const cp2x = p2.x - segDx;
+      const cp2y = clampY(p2.y - m[i + 1] * segDx);
+      d += ` C ${f(cp1x)} ${f(cp1y)}, ${f(cp2x)} ${f(cp2y)}, ${f(p2.x)} ${f(p2.y)}`;
     }
     return d;
   };

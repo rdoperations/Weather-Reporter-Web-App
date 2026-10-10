@@ -334,7 +334,7 @@ class WeatherLogic:
             params = {
                 "latitude": lat,
                 "longitude": lon,
-                "hourly": "apparent_temperature,temperature_2m,relative_humidity_2m,precipitation,rain,showers,snowfall,weather_code,wind_speed_10m,wind_gusts_10m,wind_direction_10m,cloud_cover,pressure_msl,uv_index,dewpoint_2m",
+                "hourly": "apparent_temperature,temperature_2m,relative_humidity_2m,precipitation,rain,showers,snowfall,weather_code,wind_speed_10m,wind_gusts_10m,wind_direction_10m,cloud_cover,pressure_msl,uv_index,dewpoint_2m,precipitation_probability",
                 "daily": "apparent_temperature_max,apparent_temperature_min,temperature_2m_max,temperature_2m_min,sunrise,sunset,precipitation_sum,precipitation_probability_max,wind_speed_10m_max,wind_gusts_10m_max,weather_code",
                 "timezone": "auto",
                 "forecast_days": 14,
@@ -447,8 +447,21 @@ class WeatherLogic:
                 # Use raw temperature_2m value from Open-Meteo
                 temperature_val = hourly_data.get(
                     'temperature_2m', [None]*num_times)[i]
-                rain = (hourly_data.get('rain', [0]*num_times)[i] or 0) + (hourly_data.get('showers',
-                                                                                [0]*num_times)[i] or 0) + (hourly_data.get('snowfall', [0]*num_times)[i] or 0)
+                precip = hourly_data.get('precipitation', [None]*num_times)[i]
+                if precip is not None:
+                    rain = round(float(precip), 1)
+                else:
+                    rain = round((hourly_data.get('rain', [0]*num_times)[i] or 0) +
+                                 (hourly_data.get('showers', [0]*num_times)[i] or 0) +
+                                 (hourly_data.get('snowfall', [0]*num_times)[i] or 0), 1)
+                pop_val = None
+                if not is_historical:
+                    prob = hourly_data.get('precipitation_probability', [None]*num_times)[i]
+                    if prob is not None:
+                        try:
+                            pop_val = round(float(prob))
+                        except (ValueError, TypeError):
+                            pop_val = None
                 processed.append({
                     'datetime_obj': local_time, 'datetime': local_time.strftime('%Y-%m-%d %H:%M'),
                     'description': WMO_WEATHER_CODES_EN.get(hourly_data.get('weather_code', [None]*num_times)[i], 'N/A'),
@@ -458,7 +471,7 @@ class WeatherLogic:
                     'wind_speed': hourly_data.get('wind_speed_10m', [None]*num_times)[i], 'wind_gust': hourly_data.get('wind_gusts_10m', [None]*num_times)[i],
                     'wind_direction': self._deg_to_compass(hourly_data.get('wind_direction_10m', [None]*num_times)[i]),
                     'rain': rain, 'uv_index': hourly_data.get('uv_index', [None]*num_times)[i],
-                    'pop': 100 if rain > 0 else 0, 'cloud_cover': hourly_data.get('cloud_cover', [None]*num_times)[i],
+                    'pop': pop_val, 'cloud_cover': hourly_data.get('cloud_cover', [None]*num_times)[i],
                     'dew_point': hourly_data.get('dewpoint_2m', [None]*num_times)[i]
                 })
         return processed
@@ -954,6 +967,9 @@ class WeatherLogic:
 
                 line1, = ax1.plot(dates, rains, marker='.', linestyle='-',
                                   markersize=4, linewidth=1, color=color_rain, label=rain_label)
+                valid_rains = [r for r in rains if not math.isnan(r)]
+                max_r = max(valid_rains) if valid_rains else 0
+                ax1.set_ylim(bottom=0, top=max(max_r * 1.15, 2.0))
 
                 ax2 = ax1.twinx()
                 color_pop = 'orange'

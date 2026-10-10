@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "api": "python -m uvicorn api.index:app --port 8000 --host 127.0.0.1",
     "dev:api": "python -m uvicorn api.index:app --port 8000",
     "dev:all": "node scripts/dev.mjs",
     "build": "next build",
