@@ -17,6 +17,7 @@ import WeatherChart from "@/components/WeatherChart";
 import { SectionHeader } from "@/components/ui";
 import { useWeather } from "@/hooks/useWeather";
 import { computeWave } from "@/lib/derive";
+import { AIRPORT_LOCATIONS, type LocationProfile } from "@/config/operatingLimits";
 
 export default function Home() {
   const {
@@ -41,6 +42,14 @@ export default function Home() {
     () => computeWave(weatherData, marineData, locationsConfig[selected.name]),
     [weatherData, marineData, locationsConfig, selected.name],
   );
+
+  // Offshore platforms use the platform procedure; everything else gets land criteria.
+  const profile: LocationProfile =
+    locationsConfig[selected.name]?.marine_forecast === true || wave !== null
+      ? "offshore"
+      : AIRPORT_LOCATIONS.includes(selected.name)
+        ? "airport"
+        : "onshore";
 
   const currentPoint =
     weatherData && weatherData.length > 0 ? weatherData[0] : null;
@@ -113,11 +122,13 @@ export default function Home() {
                   </>
                 }
               >
-                Operational Weather Windows
+                {profile === "offshore" ? "Operational Weather Windows" : "Outdoor Activities Planning"}
               </SectionHeader>
               <OperationalWindows
                 weatherData={weatherData}
                 marineData={marineData}
+                profile={profile}
+                timezone={locationInfo?.timezone}
               />
             </section>
           </Reveal>

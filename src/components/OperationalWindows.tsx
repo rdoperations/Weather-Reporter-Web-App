@@ -1,12 +1,15 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { HardHat, Helicopter, LifeBuoy, Ship } from "lucide-react";
+import { CloudLightning, CloudRain, HardHat, Helicopter, LifeBuoy, Ship, Sun, Thermometer, Wind } from "lucide-react";
 import {
   DEFAULT_LIMITS,
+  HEAT_LEVELS_EUROPE,
   HEAVY_RAIN_MM_PER_H,
   type ActivityIcon,
   type ActivityLimit,
+  type AlertLevels,
+  type LocationProfile,
 } from "@/config/operatingLimits";
 
 interface Point {
@@ -16,14 +19,21 @@ interface Point {
   rain?: number | null;
   description?: string | null;
   wave_height?: number | null;
+  temperature?: number | null;
+  uv_index?: number | null;
 }
 
 interface Props {
   weatherData: Point[];
   marineData?: Point[] | null;
+  /** offshore = platform procedure rows; onshore / airport = land rows (see operatingLimits). */
+  profile: LocationProfile;
+  /** IANA timezone of the location (picks regional heat defaults). */
+  timezone?: string;
 }
 
-type Status = "green" | "amber" | "red" | "unknown";
+type Status = "green" | "amber" | "orange" | "red" | "unknown";
+const RANK: Record<Status, number> = { unknown: -1, green: 0, amber: 1, orange: 2, red: 3 };
 type NumericKey = "windCaution" | "windStop" | "gustStop" | "hsCaution" | "hsStop";
 
 const STORAGE_KEY = "wr.operatingLimits.v2";
@@ -32,13 +42,23 @@ const HOUR_MS = 3_600_000;
 const COLORS: Record<Status, string> = {
   green: "#22c55e",
   amber: "#f59e0b",
+  orange: "#f97316",
   red: "#ef4444",
   unknown: "#475569",
 };
 const LABELS: Record<Status, string> = {
   green: "GO",
   amber: "CAUTION",
+  orange: "LEVEL 2",
   red: "NO-GO",
+  unknown: "NO DATA",
+};
+// Land locations use a 3-level alert scale instead of CAUTION / NO-GO.
+const LAND_LABELS: Record<Status, string> = {
+  green: "NORMAL",
+  amber: "LEVEL 1",
+  orange: "LEVEL 2",
+  red: "LEVEL 3",
   unknown: "NO DATA",
 };
 
@@ -104,6 +124,16 @@ function ActivityIconView({ icon }: { icon: ActivityIcon }) {
       return <LadderIcon />;
     case "hardhat":
       return <HardHat size={20} aria-hidden="true" />;
+    case "thermometer":
+      return <Thermometer size={20} aria-hidden="true" />;
+    case "sun":
+      return <Sun size={20} aria-hidden="true" />;
+    case "wind":
+      return <Wind size={20} aria-hidden="true" />;
+    case "rain":
+      return <CloudRain size={20} aria-hidden="true" />;
+    case "lightning":
+      return <CloudLightning size={20} aria-hidden="true" />;
   }
 }
 
@@ -122,6 +152,10 @@ function loadLimits(): ActivityLimit[] {
       for (const k of NUMERIC_KEYS) {
         if (d[k] !== null && isNum(o[k])) (merged[k] as number) = o[k] as number;
       }
+      const ov = o.levels?.values;
+      if (d.levels && Array.isArray(ov) && ov.length === 3 && ov.every(isNum)) {
+        merged.levels = { ...d.levels, values: [ov[0], ov[1], ov[2]] };
+      }
       return merged;
     });
   } catch {
@@ -134,7 +168,7 @@ function evaluate(p: Point, lim: ActivityLimit): { status: Status; reasons: stri
   let worst: Status = "green";
   let known = false;
   const bump = (s: Status) => {
-    if (s === "red" || (s === "amber" && worst === "green")) worst = s;
+    if (RANK[s] > RANK[worst]) worst = s;
   };
 
   // The procedure's wording is "X and higher", so the stop level itself is NO-GO.
@@ -155,22 +189,44 @@ function evaluate(p: Point, lim: ActivityLimit): { status: Status; reasons: stri
   tier("Gust", p.wind_gust, null, lim.gustStop, "kt");
   tier("Hs", p.wave_height, lim.hsCaution, lim.hsStop, "m");
 
+  if (lim.levels) {
+    const value = p[lim.levels.key];
+    if (isNum(value)) {
+      known = true;
+      const [l1, l2, l3] = lim.levels.values;
+      const lvl = value >= l3 ? 3 : value >= l2 ? 2 : value >= l1 ? 1 : 0;
+      if (lvl > 0) {
+        bump(lvl === 3 ? "red" : lvl === 2 ? "orange" : "amber");
+        reasons.push(
+          `${lim.levels.label} ${value.toFixed(1)}${lim.levels.unit ? " " + lim.levels.unit : ""} ≥ ${lim.levels.values[lvl - 1]} (level ${lvl})`
+        );
+      }
+    }
+  }
+
   if (lim.rainSensitive && isNum(p.rain) && p.rain >= HEAVY_RAIN_MM_PER_H) {
     known = true;
     bump("amber");
     reasons.push(`Heavy rain ${p.rain.toFixed(1)} mm`);
   }
-  if (p.description && /thunder/i.test(p.description)) {
+  if (lim.thunderSensitive && p.description) {
     known = true;
-    bump("red");
-    reasons.push("Thunderstorm");
+    if (/thunder/i.test(p.description)) {
+      bump("red");
+      reasons.push("Thunderstorm");
+    }
   }
   if (!known) return { status: "unknown", reasons: ["No data"] };
   return { status: worst, reasons };
 }
 
 function limitSummary(l: ActivityLimit): string {
-  const parts = [`Wind ≥${l.windCaution} caution / ≥${l.windStop} kt stop`];
+  const parts: string[] = [];
+  if (l.levels) {
+    const u = l.levels.unit ? ` ${l.levels.unit}` : "";
+    parts.push(`${l.levels.label} ≥${l.levels.values.join(" / ≥")}${u} (levels 1 / 2 / 3)`);
+  }
+  if (l.windCaution !== null && l.windStop !== null) parts.push(`Wind ≥${l.windCaution} caution / ≥${l.windStop} kt stop`);
   if (l.gustStop !== null) parts.push(`gust ≥${l.gustStop} kt`);
   if (l.hsStop !== null) parts.push(`Hs ≥${l.hsCaution === null ? "–" : l.hsCaution.toFixed(1)} caution / ≥${l.hsStop.toFixed(1)} m stop`);
   return parts.join(" · ");
@@ -184,13 +240,49 @@ const FIELD_LABELS: Record<NumericKey, string> = {
   hsStop: "Hs stop (m)",
 };
 
-export default function OperationalWindows({ weatherData, marineData }: Props) {
+export default function OperationalWindows({ weatherData, marineData, profile, timezone }: Props) {
   // This component only mounts after a client-side fetch, so reading localStorage during
   // the initial render cannot cause a hydration mismatch.
   const [limits, setLimits] = useState<ActivityLimit[]>(loadLimits);
   const [horizonHours, setHorizonHours] = useState(72);
   const [minWindow, setMinWindow] = useState(6);
   const [editing, setEditing] = useState(false);
+
+  const land = profile !== "offshore";
+  const labels = land ? LAND_LABELS : LABELS;
+
+  // Heat defaults depend on the region; an edited (saved) value always wins.
+  const isEurope = Boolean(timezone?.startsWith("Europe/"));
+  const sameAs = (a: number[], b: number[]) => a.length === b.length && a.every((v, i) => v === b[i]);
+  const activeLimits = useMemo(
+    () =>
+      limits
+        .filter((l) => l.profiles.includes(profile))
+        .map((l) => {
+          const def = DEFAULT_LIMITS.find((d) => d.id === l.id)?.levels;
+          if (l.id === "heat" && isEurope && l.levels && def && sameAs(l.levels.values, def.values)) {
+            return { ...l, levels: { ...l.levels, values: HEAT_LEVELS_EUROPE } as AlertLevels };
+          }
+          return l;
+        }),
+    [limits, profile, isEurope]
+  );
+
+  const updateLevel = (id: string, idx: number, value: number) => {
+    const current = activeLimits.find((l) => l.id === id)?.levels;
+    if (!current) return;
+    const values = [...current.values] as [number, number, number];
+    values[idx] = value;
+    setLimits((prev) => {
+      const next = prev.map((l) => (l.id === id && l.levels ? { ...l, levels: { ...l.levels, values } } : l));
+      try {
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  };
 
   const updateLimit = (id: string, key: NumericKey, value: number) => {
     setLimits((prev) => {
@@ -241,7 +333,7 @@ export default function OperationalWindows({ weatherData, marineData }: Props) {
 
   const rows = useMemo(
     () =>
-      limits.map((lim) => {
+      activeLimits.map((lim) => {
         const evals = horizon.map((p) => ({ p, ...evaluate(p, lim) }));
 
         // First run of consecutive non-red, known points lasting at least `minWindow` hours.
@@ -266,7 +358,7 @@ export default function OperationalWindows({ weatherData, marineData }: Props) {
 
         return { lim, evals, window: found as { start: string; end: string; hours: number } | null };
       }),
-    [limits, horizon, stepMs, minWindow]
+    [activeLimits, horizon, stepMs, minWindow]
   );
 
   if (horizon.length === 0) return null;
@@ -306,13 +398,16 @@ export default function OperationalWindows({ weatherData, marineData }: Props) {
           {editing ? "Done editing" : "Edit limits"}
         </button>
         <button onClick={resetLimits} className="underline hover:text-white">
-          Reset to procedure
+          Reset to defaults
         </button>
         <div className="ml-auto flex items-center gap-3">
-          {(["green", "amber", "red", "unknown"] as Status[]).map((s) => (
+          {(land
+            ? (["green", "amber", "orange", "red", "unknown"] as Status[])
+            : (["green", "amber", "red", "unknown"] as Status[])
+          ).map((s) => (
             <span key={s} className="flex items-center gap-1.5">
               <span className="w-3 h-3 rounded-sm" style={{ background: COLORS[s] }} />
-              {LABELS[s]}
+              {labels[s]}
             </span>
           ))}
         </div>
@@ -343,12 +438,12 @@ export default function OperationalWindows({ weatherData, marineData }: Props) {
                   style={{ background: COLORS[now.status] }}
                   title={now.reasons.join("; ")}
                 >
-                  NOW: {LABELS[now.status]}
+                  NOW: {labels[now.status]}
                 </span>
                 <span className="text-xs text-[#d1d9e6]">
                   {win ? (
                     <>
-                      Next window ≥ {minWindow} h:{" "}
+                      {land ? "Next window below level 3, ≥ " : "Next window ≥ "}{minWindow} h:{" "}
                       <strong className="font-mono text-white">
                         {shortTime(win.start)} → {shortTime(win.end)}
                       </strong>{" "}
@@ -365,14 +460,14 @@ export default function OperationalWindows({ weatherData, marineData }: Props) {
               <div
                 className="flex h-6 rounded-md overflow-hidden border border-white/10"
                 role="img"
-                aria-label={`${lim.label}: go / caution / no-go status for the next ${horizonHours} hours`}
+                aria-label={`${lim.label}: status for the next ${horizonHours} hours`}
               >
                 {evals.map((e, i) => (
                   <div
                     key={i}
                     className="flex-1 min-w-px"
                     style={{ background: COLORS[e.status] }}
-                    title={`${shortTime(e.p.datetime)} — ${LABELS[e.status]}${
+                    title={`${shortTime(e.p.datetime)} — ${labels[e.status]}${
                       e.reasons.length ? ": " + e.reasons.join("; ") : ""
                     }`}
                   />
@@ -381,6 +476,21 @@ export default function OperationalWindows({ weatherData, marineData }: Props) {
 
               {editing ? (
                 <div className="flex flex-wrap gap-x-4 gap-y-2 text-[11px] text-[#8fa6c0]">
+                  {lim.levels &&
+                    lim.levels.values.map((v, i) => (
+                      <label key={`lvl${i}`} className="flex items-center gap-2">
+                        {lim.levels!.label} level {i + 1}
+                        {lim.levels!.unit ? ` (${lim.levels!.unit})` : ""}
+                        <input
+                          type="number"
+                          min={0}
+                          step={lim.levels!.key === "rain" ? 0.1 : 1}
+                          value={v}
+                          onChange={(e) => updateLevel(lim.id, i, Number(e.target.value) || 0)}
+                          className={numInput}
+                        />
+                      </label>
+                    ))}
                   {editable.map((k) => (
                     <label key={k} className="flex items-center gap-2">
                       {FIELD_LABELS[k]}

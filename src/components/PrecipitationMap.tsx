@@ -13,13 +13,16 @@ export default function PrecipitationMap({ lat, lon }: { lat: number; lon: numbe
           </>
         }
       >
-        Precipitation Map
+        Weather Map
       </SectionHeader>
+      <p className="text-xs text-[#8fa6c0] -mt-2 mb-3">
+        Showing rain by default. Use the layer menu on the map to switch to wind, waves, temperature and more.
+      </p>
 
       {/* Windy embed with the company logo overlaid */}
       <div className="relative w-full h-[500px] overflow-hidden rounded-xl border border-white/10 shadow-2xl">
         <iframe
-          title="Windy precipitation map"
+          title="Windy weather map"
           src={`https://embed.windy.com/embed2.html?lat=${lat}&lon=${lon}&zoom=5&level=surface&overlay=rain&product=ecmwf&menu=&message=&marker=1&calendar=now&pressure=&type=map&location=coordinates&detail=&metricWind=default&metricTemp=default&radarRange=-1`}
           width="100%"
           height="100%"

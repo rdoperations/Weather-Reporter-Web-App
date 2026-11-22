@@ -1,10 +1,18 @@
 "use client";
 
 import { useState } from "react";
+import { DEFAULT_LIMITS } from "@/config/operatingLimits";
 import { errorMessage } from "@/lib/units";
+import { buildHistoricalExcel, EXCEL_VARIABLES, fetchArchive } from "@/lib/historical";
 import type { LocationInfo } from "@/types/weather";
 
-const HIST_MAX_DAYS = 31;
+// Multi-year downloads are fine (fetched in yearly chunks, built in the browser); the cap only
+// protects the browser from runaway ranges.
+const HIST_MAX_DAYS = 3660;
+const levelsOf = (id: string, fallback: [number, number, number]): [number, number, number] =>
+  DEFAULT_LIMITS.find((l) => l.id === id)?.levels?.values ?? fallback;
+
+const HIST_MIN_DATE = "1940-01-01"; // start of the Open-Meteo archive
 const HIST_LAG_DAYS = 5;
 const DAY_MS = 86_400_000;
 
@@ -27,7 +35,6 @@ export default function ExportPanel({
   lon,
   locationName,
   fetchedSource,
-  locationInfo,
 }: ExportPanelProps) {
   // Forecast PDF
   const [pdfLang, setPdfLang] = useState<"en" | "vi">("en");
@@ -37,7 +44,7 @@ export default function ExportPanel({
   const [histStartDate, setHistStartDate] = useState<string>("");
   const [histEndDate, setHistEndDate] = useState<string>("");
   const [exportingHist, setExportingHist] = useState(false);
-  const [histPdfLang, setHistPdfLang] = useState<"en" | "vi">("en");
+  const [histProgress, setHistProgress] = useState("");
 
   const handleDownloadPdf = async () => {
     setExportingPdf(true);
@@ -85,13 +92,14 @@ export default function ExportPanel({
     const end = Date.parse(`${histEndDate}T00:00:00Z`);
     if (Number.isNaN(start) || Number.isNaN(end)) return "Invalid date.";
     if (start > end) return "Start date must not be after the end date.";
+    if (histStartDate < HIST_MIN_DATE) return `Archive data starts on ${HIST_MIN_DATE}.`;
     const maxHistDate = getMaxHistDate();
     if (histEndDate > maxHistDate) {
       return `Archive data is only available up to ${maxHistDate} (about ${HIST_LAG_DAYS} days behind today).`;
     }
     const days = Math.round((end - start) / DAY_MS) + 1;
     if (days > HIST_MAX_DAYS) {
-      return `Please select at most ${HIST_MAX_DAYS} days (selected ${days}).`;
+      return `Please select at most 10 years per download (selected ${days} days).`;
     }
     return "";
   };
@@ -115,34 +123,8 @@ export default function ExportPanel({
     setTimeout(() => window.URL.revokeObjectURL(objUrl), 1000);
   };
 
-  // One fetch for both PDF and CSV: wind is requested in knots to match the rest of the app.
-  const fetchHistorical = async () => {
-    const err = histRangeError();
-    if (err) throw new Error(err);
-    const params = new URLSearchParams({
-      latitude: String(lat),
-      longitude: String(lon),
-      start_date: histStartDate,
-      end_date: histEndDate,
-      hourly:
-        "temperature_2m,relative_humidity_2m,dew_point_2m,precipitation,surface_pressure,cloudcover,wind_speed_10m,wind_direction_10m,wind_gusts_10m",
-      wind_speed_unit: "kn",
-      timezone: "auto",
-    });
-    const res = await fetch(`https://archive-api.open-meteo.com/v1/archive?${params}`);
-    if (!res.ok) throw new Error("Failed to fetch historical data from Open-Meteo Archive API.");
-    const data = await res.json();
-    const hourly = data.hourly;
-    if (!hourly || !hourly.time || hourly.time.length === 0) {
-      throw new Error("No historical data available for these dates.");
-    }
-    return { hourly, timezone: data.timezone as string | undefined };
-  };
-
-  const COMPASS = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
-
-  // Historical PDF export
-  const handleExportHistoricalPdf = async () => {
+  // Shared by the Excel and CSV downloads: validates, fetches (in chunks) and reports progress.
+  const runHistorical = async (variables: string[], build: (h: Awaited<ReturnType<typeof fetchArchive>>) => Promise<void>) => {
     const rangeErr = histRangeError();
     if (rangeErr) {
       alert(rangeErr);
@@ -150,83 +132,77 @@ export default function ExportPanel({
     }
     setExportingHist(true);
     try {
-      const { hourly, timezone } = await fetchHistorical();
-      const w_data = hourly.time.map((t: string, i: number) => {
-        const dir = hourly.wind_direction_10m[i];
-        return {
-          datetime: t.replace("T", " "),
-          temperature: hourly.temperature_2m[i],
-          humidity: hourly.relative_humidity_2m[i],
-          dew_point: hourly.dew_point_2m[i],
-          rain: hourly.precipitation[i],
-          cloud_cover: hourly.cloudcover[i],
-          wind_speed: hourly.wind_speed_10m[i],
-          wind_gust: hourly.wind_gusts_10m[i],
-          wind_direction:
-            dir === null || dir === undefined ? "N/A" : COMPASS[Math.floor(dir / 22.5 + 0.5) % 16],
-          pop: null,
-          uv_index: null,
-          description: "N/A",
-        };
-      });
-
-      const pdfRes = await fetch("/api/export/pdf_custom", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          lat: lat,
-          lon: lon,
-          source: "Historical Data",
-          location_name: locationName,
-          language: histPdfLang,
-          w_data,
-          l_info: { ...(locationInfo || { name: locationName }), timezone: timezone || locationInfo?.timezone || "UTC" },
-        }),
-      });
-      if (!pdfRes.ok) throw new Error("Failed to generate Historical PDF");
-      downloadBlob(await pdfRes.blob(), `Historical_Weather_${safeName()}_${fileTimestamp()}.pdf`);
+      const result = await fetchArchive(lat, lon, histStartDate, histEndDate, variables, (done, total) =>
+        setHistProgress(total > 1 ? `Fetching ${Math.min(done + 1, total)} / ${total}...` : "Fetching...")
+      );
+      setHistProgress("Building file...");
+      await build(result);
     } catch (e) {
       alert("Error: " + errorMessage(e, "unknown error"));
     } finally {
       setExportingHist(false);
+      setHistProgress("");
     }
   };
+
+  // Historical Excel export
+  const handleExportHistoricalExcel = () =>
+    runHistorical(EXCEL_VARIABLES, async ({ hourly }) => {
+      const blob = await buildHistoricalExcel({
+        locationName,
+        lat,
+        lon,
+        start: histStartDate,
+        end: histEndDate,
+        hourly,
+        thresholds: {
+          wind: levelsOf("wind_land", [20, 30, 40]),
+          rain: levelsOf("rain_land", [2.5, 5, 7.5]),
+          temp: levelsOf("heat", [35, 37, 40]),
+        },
+      });
+      downloadBlob(
+        blob,
+        `Historical_Weather_${safeName()}_${histStartDate.replace(/-/g, "")}_to_${histEndDate.replace(/-/g, "")}.xlsx`
+      );
+    });
 
   // Historical CSV export
-  const handleExportHistoricalCsv = async () => {
-    const rangeErr = histRangeError();
-    if (rangeErr) {
-      alert(rangeErr);
-      return;
-    }
-    setExportingHist(true);
-    try {
-      const { hourly } = await fetchHistorical();
-      const cols: [string, string][] = [
-        ["time", "time"],
-        ["temperature_2m", "temperature_2m (°C)"],
-        ["relative_humidity_2m", "relative_humidity_2m (%)"],
-        ["dew_point_2m", "dew_point_2m (°C)"],
-        ["precipitation", "precipitation (mm)"],
-        ["surface_pressure", "surface_pressure (hPa)"],
-        ["cloudcover", "cloudcover (%)"],
-        ["wind_speed_10m", "wind_speed_10m (kn)"],
-        ["wind_direction_10m", "wind_direction_10m (°)"],
-        ["wind_gusts_10m", "wind_gusts_10m (kn)"],
-      ];
-      const header = cols.map(([, label]) => label).join(",");
-      const rows = hourly.time.map((_: string, i: number) =>
-        cols.map(([key]) => (hourly[key]?.[i] ?? "")).join(",")
-      );
-      // BOM so Excel opens the "°" characters correctly.
-      const blob = new Blob(["﻿" + [header, ...rows].join("\n")], { type: "text/csv;charset=utf-8" });
-      downloadBlob(blob, `Historical_Weather_${safeName()}_${fileTimestamp()}.csv`);
-    } catch (e) {
-      alert("Error: " + errorMessage(e, "unknown error"));
-    } finally {
-      setExportingHist(false);
-    }
-  };
+  const handleExportHistoricalCsv = () =>
+    runHistorical(
+      [
+        "temperature_2m",
+        "relative_humidity_2m",
+        "dew_point_2m",
+        "precipitation",
+        "surface_pressure",
+        "cloud_cover",
+        "wind_speed_10m",
+        "wind_direction_10m",
+        "wind_gusts_10m",
+      ],
+      async ({ hourly }) => {
+        const cols: [string, string][] = [
+          ["time", "time"],
+          ["temperature_2m", "temperature_2m (°C)"],
+          ["relative_humidity_2m", "relative_humidity_2m (%)"],
+          ["dew_point_2m", "dew_point_2m (°C)"],
+          ["precipitation", "precipitation (mm)"],
+          ["surface_pressure", "surface_pressure (hPa)"],
+          ["cloud_cover", "cloudcover (%)"],
+          ["wind_speed_10m", "wind_speed_10m (kn)"],
+          ["wind_direction_10m", "wind_direction_10m (°)"],
+          ["wind_gusts_10m", "wind_gusts_10m (kn)"],
+        ];
+        const header = cols.map(([, label]) => label).join(",");
+        const rows = hourly.time.map((_: string, i: number) =>
+          cols.map(([key]) => hourly[key]?.[i] ?? "").join(",")
+        );
+        // BOM so Excel opens the "°" characters correctly.
+        const blob = new Blob(["\uFEFF" + [header, ...rows].join("\n")], { type: "text/csv;charset=utf-8" });
+        downloadBlob(blob, `Historical_Weather_${safeName()}_${fileTimestamp()}.csv`);
+      }
+    );
 
   return (
     <section>
@@ -324,7 +300,7 @@ export default function ExportPanel({
                 <path d="M10 16h4" />
                 <path d="M12 14v4" />
               </svg>
-              Historical Weather Report - PDF
+              Historical Weather Report
             </div>
             
             <div className="grid grid-cols-2 gap-2 text-xs mb-3">
@@ -333,6 +309,7 @@ export default function ExportPanel({
                 <input 
                   type="date" 
                   value={histStartDate}
+                  min={HIST_MIN_DATE}
                   max={getMaxHistDate()}
                   onChange={(e) => setHistStartDate(e.target.value)}
                   className="w-full bg-black/40 border border-white/10 rounded-lg p-2 text-white" 
@@ -343,6 +320,7 @@ export default function ExportPanel({
                 <input 
                   type="date" 
                   value={histEndDate}
+                  min={HIST_MIN_DATE}
                   max={getMaxHistDate()}
                   onChange={(e) => setHistEndDate(e.target.value)}
                   className="w-full bg-black/40 border border-white/10 rounded-lg p-2 text-white" 
@@ -350,49 +328,25 @@ export default function ExportPanel({
               </div>
             </div>
 
-            <div className="flex items-center gap-5 text-sm flex-wrap mb-2">
-              <span className="text-[#8fa6c0]">PDF Language:</span>
-              <label className="flex items-center gap-2 cursor-pointer text-[#e8f0fe]">
-                <input
-                  type="radio"
-                  name="histPdfLang"
-                  checked={histPdfLang === "en"}
-                  onChange={() => setHistPdfLang("en")}
-                  className="accent-[#00c6ff]"
-                />
-                English
-              </label>
-              <label className="flex items-center gap-2 cursor-pointer text-[#e8f0fe]">
-                <input
-                  type="radio"
-                  name="histPdfLang"
-                  checked={histPdfLang === "vi"}
-                  onChange={() => setHistPdfLang("vi")}
-                  className="accent-[#00c6ff]"
-                />
-                Vietnamese
-              </label>
-            </div>
-            
             <p className="text-[11px] text-yellow-400 mt-2 bg-yellow-400/10 p-2 rounded-lg border border-yellow-400/20">
-              ⚠️ <strong>Note:</strong> Historical data can be large in size. Generating and downloading the PDF file may take longer than usual. Please be patient. Maximum range: {HIST_MAX_DAYS} days; latest available date: {getMaxHistDate()}. Wind is in knots.
+              ⚠️ <strong>Note:</strong> Historical data can be large in size. Generating and downloading the file may take longer than usual. Please be patient.
             </p>
           </div>
 
           <div className="flex gap-3 mt-auto">
             <button
+              onClick={handleExportHistoricalExcel}
+              disabled={exportingHist || !histStartDate || !histEndDate}
+              className="btn-primary flex-1 py-3 text-sm disabled:opacity-50"
+            >
+              {exportingHist ? histProgress || "Working..." : "Download Excel"}
+            </button>
+            <button
               onClick={handleExportHistoricalCsv}
               disabled={exportingHist || !histStartDate || !histEndDate}
               className="btn-primary flex-1 py-3 text-sm disabled:opacity-50"
             >
-              {exportingHist ? "Working..." : `Download CSV`}
-            </button>
-            <button
-              onClick={handleExportHistoricalPdf}
-              disabled={exportingHist || !histStartDate || !histEndDate}
-              className="btn-primary flex-1 py-3 text-sm disabled:opacity-50"
-            >
-              {exportingHist ? "Generating PDF..." : `Download PDF`}
+              {exportingHist ? "Working..." : "Download CSV"}
             </button>
           </div>
         </div>
