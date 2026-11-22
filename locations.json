@@ -4,7 +4,7 @@
     "Rong Doi Platform - Block 11.2",
     "Ba Dinh - Ha Noi",
     "Vung Tau Airport - Vung Tau",
-    "Hiep Binh Chanh"
+    "Hiep Binh - HCMC"
   ],
   "locations": {
     "Lan Tay Platform - Block 06.1": {
@@ -20,6 +20,14 @@
       "coords": [
         7.7925,
         108.2021
+      ],
+      "marine_forecast": true
+    },
+    "BK-TNHA Platform": {
+      "pdf_name": "BK-TNHA Platform",
+      "coords": [
+        7.728391,
+        107.930079
       ],
       "marine_forecast": true
     },
@@ -47,16 +55,16 @@
       ],
       "marine_forecast": false
     },
-    "Zarubezhneft HO - Moscow": {
-      "pdf_name": "Zarubezhneft HO - Moscow",
+    "Moscow": {
+      "pdf_name": "Moscow",
       "coords": [
-        55.7596,
-        37.6374
+        55.753082137992074,
+        37.62216963074769
       ],
       "marine_forecast": false
     },
-    "Hiep Binh Chanh": {
-      "pdf_name": "Hiep Binh Chanh",
+    "Hiep Binh - HCMC": {
+      "pdf_name": "Hiep Binh - HCMC",
       "coords": [
         10.8316,
         106.7326

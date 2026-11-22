@@ -146,10 +146,22 @@ const fmtDayMonth = (ms: number) => {
 };
 const fmtDayMonthTime = (ms: number) => `${fmtDayMonth(ms)} ${new Date(ms).toISOString().slice(11, 16)}`;
 
-// ─── Outer component: tabs ──────────────────────────────────────────────────
+// ─── Outer component: tabs + time-range controls ─────────────────────────────
+
+// Selectable windows, longest first. "All" (the whole forecast, normally 14 days) is the default.
+const RANGE_OPTIONS = [
+  { hours: 168, label: "7 days" },
+  { hours: 72, label: "72 h" },
+  { hours: 48, label: "48 h" },
+  { hours: 24, label: "24 h" },
+];
 
 export default function WeatherChart({ weatherData, marineData, apiSource }: WeatherChartProps) {
   const [requestedTab, setRequestedTab] = useState<string>("temp_hum");
+  // Window length in hours (null = whole forecast) and its start, in hours after the first
+  // data point. Shared by all tabs so parameters can be compared over the same period.
+  const [range, setRange] = useState<number | null>(null);
+  const [startH, setStartH] = useState(0);
 
   // Only offer tabs that have something to plot (e.g. no UV tab for MET Norway,
   // no wave tabs for onshore locations).
@@ -163,13 +175,58 @@ export default function WeatherChart({ weatherData, marineData, apiSource }: Wea
 
   const active = tabs.find((t) => t.id === requestedTab) ?? tabs[0];
 
+  const rows = useMemo<Row[]>(
+    () => (active ? ((active.dataset === "marine" ? marineData : weatherData) ?? []) : []),
+    [active, marineData, weatherData]
+  );
+
+  const bounds = useMemo(() => {
+    const times = rows.map((r) => toMs(r.datetime)).filter(Number.isFinite);
+    return times.length ? { t0: Math.min(...times), t1: Math.max(...times) } : null;
+  }, [rows]);
+  const totalH = bounds ? (bounds.t1 - bounds.t0) / HOUR_MS : 0;
+
+  // Only offer windows shorter than the data; derive (don't store) the effective values so a
+  // new location with a different span can never leave the window out of bounds.
+  const options = RANGE_OPTIONS.filter((o) => o.hours < totalH - 1);
+  const effRange = range !== null && range < totalH - 1 ? range : null;
+  const maxStart = effRange !== null ? Math.max(0, totalH - effRange) : 0;
+  const start = Math.min(Math.max(0, startH), maxStart);
+
+  const windowRows = useMemo(() => {
+    if (!bounds || effRange === null) return rows;
+    const a = bounds.t0 + start * HOUR_MS;
+    const b = a + effRange * HOUR_MS;
+    return rows.filter((r) => {
+      const t = toMs(r.datetime);
+      return t >= a && t <= b;
+    });
+  }, [rows, bounds, effRange, start]);
+
   if (!active) {
     return (
       <div className="glass-card !p-6 text-sm text-[#8fa6c0]">No chartable data in this forecast.</div>
     );
   }
 
-  const rows: Row[] = (active.dataset === "marine" ? marineData : weatherData) ?? [];
+  const chooseRange = (hours: number | null) => {
+    setRange(hours);
+    setStartH(0);
+  };
+
+  const pill = (on: boolean) =>
+    `px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+      on
+        ? "bg-white/10 text-white border border-[#00c6ff]/50"
+        : "text-[#8fa6c0] border border-white/10 hover:text-[#e8f0fe] hover:bg-white/5"
+    }`;
+  const navBtn =
+    "w-8 h-8 grid place-items-center rounded-lg border border-white/10 text-[#e8f0fe] hover:bg-white/5 disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-not-allowed transition-all";
+
+  const windowLabel =
+    bounds && effRange !== null
+      ? `${fmtDayMonthTime(bounds.t0 + start * HOUR_MS)} – ${fmtDayMonthTime(bounds.t0 + (start + effRange) * HOUR_MS)}`
+      : null;
 
   return (
     <div className="glass-card !p-6 space-y-5">
@@ -191,8 +248,62 @@ export default function WeatherChart({ weatherData, marineData, apiSource }: Wea
         ))}
       </div>
 
-      {/* key: reset hover state when the tab changes */}
-      <TimeSeriesChart key={active.id} rows={rows} tab={active} />
+      {options.length > 0 && (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-1">
+          <div role="group" aria-label="Time range" className="flex flex-wrap items-center gap-1.5">
+            <span className="text-xs text-[#8fa6c0] mr-1">Range</span>
+            <button type="button" aria-pressed={effRange === null} onClick={() => chooseRange(null)} className={pill(effRange === null)}>
+              All
+            </button>
+            {options.map((o) => (
+              <button
+                key={o.hours}
+                type="button"
+                aria-pressed={effRange === o.hours}
+                onClick={() => chooseRange(o.hours)}
+                className={pill(effRange === o.hours)}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+
+          {effRange !== null && (
+            <div className="flex items-center gap-1.5 sm:ml-auto">
+              <button
+                type="button"
+                aria-label="Previous period"
+                className={navBtn}
+                disabled={start <= 0}
+                onClick={() => setStartH(Math.max(0, start - effRange))}
+              >
+                ◀
+              </button>
+              <span className="text-xs font-mono text-[#d1d9e6] min-w-[170px] text-center">{windowLabel}</span>
+              <button
+                type="button"
+                aria-label="Next period"
+                className={navBtn}
+                disabled={start >= maxStart - 0.01}
+                onClick={() => setStartH(Math.min(maxStart, start + effRange))}
+              >
+                ▶
+              </button>
+              <button
+                type="button"
+                className={`${pill(false)} ml-1`}
+                disabled={start <= 0}
+                onClick={() => setStartH(0)}
+              >
+                Now
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* key: reset hover state when the tab or window changes */}
+      <TimeSeriesChart key={`${active.id}-${effRange}-${start}`} rows={windowRows} tab={active} />
     </div>
   );
 }
@@ -426,7 +537,9 @@ function TimeSeriesChart({ rows, tab }: { rows: Row[]; tab: TabDef }) {
           <path d={line} fill="none" stroke={series.color} strokeWidth="8" strokeOpacity="0.1" strokeLinecap="round" />
           <path d={line} fill="none" stroke={series.color} strokeWidth="4" strokeOpacity="0.25" strokeLinecap="round" />
           <path d={line} fill="none" stroke={series.color} strokeWidth="2" strokeLinecap="round" />
-          {seg.length === 1 && <circle cx={first.x} cy={first.y} r="3" fill={series.color} />}
+          {/* Few points (short window / coarse source): show the actual data points. */}
+          {(seg.length === 1 || points.length <= 30) &&
+            seg.map((q, k) => <circle key={k} cx={q.x} cy={q.y} r={seg.length === 1 ? 3 : 2.5} fill={series.color} />)}
         </g>
       );
     });

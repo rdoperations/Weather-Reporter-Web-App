@@ -17,11 +17,12 @@ const DEFAULT_NAME = "Rong Doi Platform - Block 11.2";
 const FALLBACK_LOCATIONS: Record<string, SavedLocation> = {
   "Lan Tay Platform - Block 06.1": { pdf_name: "Lan Tay Platform - Block 06.1", coords: [7.5783, 108.8694] },
   "Rong Doi Platform - Block 11.2": { pdf_name: "Rong Doi Platform - Block 11.2", coords: [7.7925, 108.2021] },
+  "BK-TNHA Platform": { pdf_name: "BK-TNHA Platform", coords: [7.728391, 107.930079] },
   "An Phu Office - An Khanh Ward": { pdf_name: "An Phu Office - An Khanh Ward", coords: [10.8094, 106.7366] },
   "Vung Tau Airport - Vung Tau": { pdf_name: "Vung Tau Airport - Vung Tau", coords: [10.376, 107.0932] },
   "Ba Dinh - Ha Noi": { pdf_name: "Ba Dinh - Ha Noi", coords: [21.0368, 105.8346] },
-  "Zarubezhneft HO - Moscow": { pdf_name: "Zarubezhneft HO - Moscow", coords: [55.7596, 37.6374] },
-  "Hiep Binh Chanh": { pdf_name: "Hiep Binh Chanh", coords: [10.8316, 106.7326] },
+  "Moscow": { pdf_name: "Moscow", coords: [55.753082137992074, 37.62216963074769] },
+  "Hiep Binh - HCMC": { pdf_name: "Hiep Binh - HCMC", coords: [10.8316, 106.7326] },
 };
 
 // Shown when the backend answers with a bare 5xx (in development this almost always means
@@ -56,6 +57,8 @@ export function useWeather() {
   // Source the on-screen data was actually fetched from (the radio may have changed since).
   const [fetchedSource, setFetchedSource] = useState<string>("Open-Meteo");
   const [loading, setLoading] = useState<boolean>(false);
+  // Incremented after every successful forecast load (lets the UI react to "data arrived").
+  const [loadCount, setLoadCount] = useState(0);
   const [error, setError] = useState<string>("");
   const [weatherData, setWeatherData] = useState<WeatherPoint[] | null>(null);
   const [locationInfo, setLocationInfo] = useState<LocationInfo | null>(null);
@@ -96,6 +99,7 @@ export function useWeather() {
         setLocationInfo(data.location_info);
         setMarineData(data.marine_data);
         setFetchedSource(source);
+        setLoadCount((n) => n + 1);
       } catch (err) {
         if (requestId !== requestIdRef.current) return;
         setError(errorMessage(err, "Failed to fetch weather data"));
@@ -163,6 +167,7 @@ export function useWeather() {
     setDataSource,
     fetchedSource,
     loading,
+    loadCount,
     error,
     weatherData,
     locationInfo,

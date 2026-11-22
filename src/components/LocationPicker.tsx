@@ -32,6 +32,10 @@ interface LocationPickerProps {
   selected: SelectedLocation;
   /** Called when the user confirms a location in any tab. */
   onConfirm: (lat: number, lon: number, name: string) => void;
+  /** True while a forecast request is running. */
+  loading: boolean;
+  /** Increments after each successful forecast load. */
+  loadCount: number;
 }
 
 export default function LocationPicker({
@@ -39,11 +43,30 @@ export default function LocationPicker({
   defaultLocation,
   selected,
   onConfirm,
+  loading,
+  loadCount,
 }: LocationPickerProps) {
   const { lat: selectedLat, lon: selectedLon, name: locationName } = selected;
   const locNames = Object.keys(locationsConfig);
 
   const [activeTab, setActiveTab] = useState<LocationTab>("saved");
+
+  // After a forecast loads, jump to the Map tab so the chosen place is visible. Only if the
+  // user has not picked a tab themselves since the request started (never yank them away).
+  const [autoSwitchArmed, setAutoSwitchArmed] = useState(false);
+  const [prevLoading, setPrevLoading] = useState(loading);
+  const [prevLoadCount, setPrevLoadCount] = useState(loadCount);
+  if (prevLoading !== loading) {
+    setPrevLoading(loading);
+    if (loading) setAutoSwitchArmed(true);
+  }
+  if (prevLoadCount !== loadCount) {
+    setPrevLoadCount(loadCount);
+    if (autoSwitchArmed) {
+      setActiveTab("map");
+      setAutoSwitchArmed(false);
+    }
+  }
 
   // Saved dropdown follows the default location when it changes (after the config loads);
   // afterwards it is the user's own choice.
@@ -143,7 +166,10 @@ export default function LocationPicker({
         {LOCATION_TABS.map((tab) => (
           <button
             key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
+            onClick={() => {
+              setActiveTab(tab.id);
+              setAutoSwitchArmed(false);
+            }}
             className={`flex-1 min-w-[130px] py-2.5 px-4 rounded-lg text-sm font-semibold transition-all ${
               activeTab === tab.id
                 ? "bg-gradient-to-r from-[#0072ff] to-[#00c6ff] text-white shadow-md shadow-[#0072ff]/30"
