@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { DEFAULT_LIMITS, type LocationProfile } from "@/config/operatingLimits";
 import { errorMessage } from "@/lib/units";
-import { buildHistoricalExcel, EXCEL_VARIABLES, fetchArchive } from "@/lib/historical";
+import { attachWaves, buildHistoricalExcel, EXCEL_VARIABLES, fetchArchive, type WaveInfo } from "@/lib/historical";
 import type { LocationInfo } from "@/types/weather";
 
 // Multi-year downloads are fine (fetched in yearly chunks, built in the browser); the cap only
@@ -11,6 +11,9 @@ import type { LocationInfo } from "@/types/weather";
 const HIST_MAX_DAYS = 3660;
 const levelsOf = (id: string, fallback: [number, number, number]): [number, number, number] =>
   DEFAULT_LIMITS.find((l) => l.id === id)?.levels?.values ?? fallback;
+
+/** Significant wave height alert levels (m) used in the offshore historical report. */
+const WAVE_LEVELS: [number, number, number] = [2.0, 3.5, 5.0];
 
 const HIST_MIN_DATE = "1940-01-01"; // start of the Open-Meteo archive
 const HIST_LAG_DAYS = 5;
@@ -145,6 +148,15 @@ export default function ExportPanel({
   // Historical Excel export
   const handleExportHistoricalExcel = () =>
     runHistorical(EXCEL_VARIABLES, async ({ hourly }) => {
+      // Offshore sites also get significant wave height (ERA5-Ocean); a failure only drops the waves.
+      let waves: WaveInfo | undefined;
+      if (profile === "offshore") {
+        setHistProgress("Fetching waves...");
+        waves = await attachWaves(hourly, lat, lon, histStartDate, histEndDate, (done, total) =>
+          setHistProgress(total > 1 ? `Fetching waves ${Math.min(done + 1, total)} / ${total}...` : "Fetching waves...")
+        );
+        setHistProgress("Building file...");
+      }
       const blob = await buildHistoricalExcel({
         locationName,
         lat,
@@ -152,7 +164,9 @@ export default function ExportPanel({
         start: histStartDate,
         end: histEndDate,
         hourly,
+        waves,
         thresholds: {
+          wave: profile === "offshore" ? WAVE_LEVELS : undefined,
           // Offshore sites have no onshore wind levels; keep the generic 20/30/40 kt scale there.
           wind: profile === "offshore" ? [20, 30, 40] : levelsOf("wind_land", [15, 20, 25]),
           rain: levelsOf("rain_land", [2.5, 5, 7.5]),

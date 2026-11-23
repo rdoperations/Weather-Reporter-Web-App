@@ -6,6 +6,8 @@ export interface Thresholds {
   wind: [number, number, number]; // kt
   rain: [number, number, number]; // mm/h
   temp: [number, number, number]; // °C
+  /** Significant wave height levels, metres. Present only for offshore reports. */
+  wave?: [number, number, number];
 }
 
 interface Extreme {
@@ -45,6 +47,8 @@ export interface Stats {
   pressureAvg: number | null;
   exceed: { wind: number[]; rain: number[]; temp: number[] };
   windDir: WindDirStats;
+  /** Significant wave height (offshore reports with wave data); null when there is none. */
+  wave: { hours: number; avg: number | null; max: Extreme | null; exceed: number[] } | null;
 }
 
 export interface MonthRow {
@@ -61,6 +65,8 @@ export interface MonthRow {
   thunderHours: number;
   dominantDir: string | null;
   dominantDirPct: number | null;
+  waveAvg: number | null;
+  waveMax: number | null;
 }
 
 const ok = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
@@ -140,7 +146,11 @@ export function computeSummary(h: ArchiveSeries, th: Thresholds): { stats: Stats
   const exceed = { wind: [0, 0, 0], rain: [0, 0, 0], temp: [0, 0, 0] };
 
   const dirAll = new DirAcc();
-  type M = { n: number; temp: Acc; hum: Acc; wind: Acc; tMin: number | null; tMax: number | null; gust: number | null; rain: number; rainy: number; thunder: number; dir: DirAcc };
+  const hasWave = !!h.wave_height?.some(ok);
+  const wave = new Acc();
+  let wMaxWave: Extreme | null = null;
+  const waveExceed = [0, 0, 0];
+  type M = { waveAcc: Acc; waveMax: number | null; n: number; temp: Acc; hum: Acc; wind: Acc; tMin: number | null; tMax: number | null; gust: number | null; rain: number; rainy: number; thunder: number; dir: DirAcc };
   const byMonth = new Map<string, M>();
 
   for (let i = 0; i < h.time.length; i++) {
@@ -150,7 +160,7 @@ export function computeSummary(h: ArchiveSeries, th: Thresholds): { stats: Stats
     const key = h.time[i].slice(0, 7);
     let m = byMonth.get(key);
     if (!m) {
-      m = { n: 0, temp: new Acc(), hum: new Acc(), wind: new Acc(), tMin: null, tMax: null, gust: null, rain: 0, rainy: 0, thunder: 0, dir: new DirAcc() };
+      m = { waveAcc: new Acc(), waveMax: null, n: 0, temp: new Acc(), hum: new Acc(), wind: new Acc(), tMin: null, tMax: null, gust: null, rain: 0, rainy: 0, thunder: 0, dir: new DirAcc() };
       byMonth.set(key, m);
     }
     m.n++;
@@ -176,6 +186,14 @@ export function computeSummary(h: ArchiveSeries, th: Thresholds): { stats: Stats
       th.rain.forEach((x, k) => { if (R >= x) exceed.rain[k]++; });
     }
     if (ok(C) && C >= 95) { thunderHours++; m.thunder++; }
+    const Hs = h.wave_height?.[i];
+    if (ok(Hs)) {
+      wave.add(Hs);
+      m.waveAcc.add(Hs);
+      m.waveMax = m.waveMax === null ? Hs : Math.max(m.waveMax, Hs);
+      wMaxWave = track(wMaxWave, Hs, t, true);
+      (th.wave ?? []).forEach((x, k) => { if (Hs >= x) waveExceed[k]++; });
+    }
   }
 
   const stats: Stats = {
@@ -192,6 +210,7 @@ export function computeSummary(h: ArchiveSeries, th: Thresholds): { stats: Stats
     pressureAvg: press.avg,
     exceed,
     windDir: dirAll.stats(),
+    wave: hasWave ? { hours: wave.n, avg: wave.avg, max: wMaxWave, exceed: waveExceed } : null,
   };
   const months: MonthRow[] = [...byMonth.entries()]
     .sort(([a], [b]) => (a < b ? -1 : 1))
@@ -209,6 +228,8 @@ export function computeSummary(h: ArchiveSeries, th: Thresholds): { stats: Stats
       thunderHours: m.thunder,
       dominantDir: m.dir.dominant?.dir ?? null,
       dominantDirPct: m.dir.dominant?.pct ?? null,
+      waveAvg: m.waveAcc.avg,
+      waveMax: m.waveMax,
     }));
   return { stats, months };
 }
@@ -442,10 +463,10 @@ function niceStep(raw: number): number {
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 export const monthLabel = (m: string) => `${MONTHS[Number(m.slice(5, 7)) - 1]} ${m.slice(2, 4)}`;
 
-export function buildChartSpecs(months: MonthRow[]): ChartSpec[] {
+export function buildChartSpecs(months: MonthRow[], withWaves = false): ChartSpec[] {
   const labels = months.map((m) => monthLabel(m.month));
   const r1 = (v: number | null) => (v === null ? null : Math.round(v * 10) / 10);
-  return [
+  const charts: ChartSpec[] = [
     {
       title: "Monthly temperature",
       unit: "°C",
@@ -472,4 +493,16 @@ export function buildChartSpecs(months: MonthRow[]): ChartSpec[] {
       ],
     },
   ];
+  if (withWaves) {
+    charts.push({
+      title: "Monthly wave height",
+      unit: "m",
+      labels,
+      series: [
+        { name: "Max Hs", color: "#ef4444", type: "line", values: months.map((m) => r1(m.waveMax)) },
+        { name: "Average Hs", color: "#0ea5e9", type: "line", values: months.map((m) => r1(m.waveAvg)) },
+      ],
+    });
+  }
+  return charts;
 }

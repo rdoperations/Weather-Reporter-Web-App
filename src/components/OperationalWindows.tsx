@@ -36,7 +36,7 @@ type Status = "green" | "amber" | "orange" | "red" | "unknown";
 const RANK: Record<Status, number> = { unknown: -1, green: 0, amber: 1, orange: 2, red: 3 };
 type NumericKey = "windCaution" | "windStop" | "gustStop" | "hsCaution" | "hsStop";
 
-const STORAGE_KEY = "wr.operatingLimits.v4";
+const STORAGE_KEY = "wr.operatingLimits.v5";
 const HOUR_MS = 3_600_000;
 
 const COLORS: Record<Status, string> = {

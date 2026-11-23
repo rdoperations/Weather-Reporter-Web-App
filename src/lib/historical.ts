@@ -17,6 +17,8 @@ import {
 
 const DAY_MS = 86_400_000;
 const ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive";
+/** Marine API with the ERA5-Ocean reanalysis: hourly wave data back to 1940 on a ~0.5° grid. */
+const MARINE_URL = "https://marine-api.open-meteo.com/v1/marine";
 /** One request covers at most this many days; longer ranges are fetched chunk by chunk. */
 const CHUNK_DAYS = 366;
 
@@ -42,10 +44,10 @@ export function splitRange(start: string, end: string): [string, string][] {
   return out;
 }
 
-async function fetchChunk(params: URLSearchParams): Promise<Response> {
+async function fetchChunk(params: URLSearchParams, baseUrl = ARCHIVE_URL): Promise<Response> {
   // Open-Meteo answers 429 when a burst of requests is too heavy: wait and retry a few times.
   for (let attempt = 0; ; attempt++) {
-    const res = await fetch(`${ARCHIVE_URL}?${params}`);
+    const res = await fetch(`${baseUrl}?${params}`);
     if (res.status !== 429 || attempt >= 3) return res;
     await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
   }
@@ -104,6 +106,65 @@ export async function fetchArchive(
   return { hourly: merged, timezone };
 }
 
+/** What the wave download produced; the report explains it when waves are missing. */
+export interface WaveInfo {
+  /** Model grid point the values belong to (it is snapped to the ~0.5° ERA5-Ocean grid). */
+  grid: { lat: number; lon: number } | null;
+  /** Set when waves could not be added (request failed or the grid cell has no data). */
+  problem?: string;
+}
+
+/**
+ * Adds an hourly `wave_height` series (significant wave height, m) to `hourly`, aligned by
+ * timestamp. Never throws: a failure just leaves the report without waves.
+ */
+export async function attachWaves(
+  hourly: ArchiveSeries,
+  lat: number,
+  lon: number,
+  start: string,
+  end: string,
+  onProgress?: (done: number, total: number) => void
+): Promise<WaveInfo> {
+  const byTime = new Map<string, number | null>();
+  let grid: WaveInfo["grid"] = null;
+  const chunks = splitRange(start, end);
+  try {
+    for (let i = 0; i < chunks.length; i++) {
+      onProgress?.(i, chunks.length);
+      const [a, b] = chunks[i];
+      const res = await fetchChunk(
+        new URLSearchParams({
+          latitude: String(lat),
+          longitude: String(lon),
+          start_date: a,
+          end_date: b,
+          hourly: "wave_height",
+          models: "era5_ocean",
+          timezone: "auto",
+        }),
+        MARINE_URL
+      );
+      if (!res.ok) throw new Error(`Marine API answered ${res.status}`);
+      const data = await res.json();
+      const h = data.hourly;
+      if (!h || !Array.isArray(h.time)) continue;
+      if (typeof data.latitude === "number" && typeof data.longitude === "number") {
+        grid = grid ?? { lat: data.latitude, lon: data.longitude };
+      }
+      h.time.forEach((t: string, k: number) => byTime.set(t, num(h.wave_height?.[k])));
+    }
+  } catch (e) {
+    return { grid, problem: e instanceof Error ? e.message : "wave request failed" };
+  }
+  const col = hourly.time.map((t) => byTime.get(t) ?? null);
+  if (!col.some((v) => v !== null)) {
+    return { grid, problem: "no wave data for this location and period (the model grid cell may be on land)" };
+  }
+  hourly.wave_height = col;
+  return { grid };
+}
+
 // ─── Excel report ────────────────────────────────────────────────────────────
 
 const WMO_EN: Record<number, string> = {
@@ -157,6 +218,8 @@ export async function buildHistoricalExcel(opts: {
   hourly: ArchiveSeries;
   /** Alert thresholds (same as the web app) for the "hours at or above" table. */
   thresholds: Thresholds;
+  /** Offshore reports only: outcome of the wave download (waves are in `hourly.wave_height`). */
+  waves?: WaveInfo;
 }): Promise<Blob> {
   const { locationName, lat, lon, start, end, hourly } = opts;
   const ExcelJS = (await import("exceljs")).default;
@@ -176,8 +239,10 @@ export async function buildHistoricalExcel(opts: {
   ];
   info.forEach(([a, b], i) => styleInfoRow(ws, i + 1, a, b, 4));
 
+  const withWaves = !!hourly.wave_height?.some((v) => v !== null);
+  const headers = withWaves ? [...HEADERS.slice(0, 7), "Wave Height (m)", ...HEADERS.slice(7)] : HEADERS;
   const header = ws.getRow(6);
-  HEADERS.forEach((h, i) => {
+  headers.forEach((h, i) => {
     const c = header.getCell(i + 1);
     c.value = h;
     c.font = { bold: true, color: { argb: "FFFFFFFF" } };
@@ -189,7 +254,7 @@ export async function buildHistoricalExcel(opts: {
   const rows: (string | number | null)[][] = new Array(n);
   for (let i = 0; i < n; i++) {
     const code = num(hourly.weather_code?.[i]);
-    rows[i] = [
+    const r: (string | number | null)[] = [
       hourly.time[i].replace("T", " "),
       code === null ? "" : (WMO_EN[code] ?? "N/A"),
       num(hourly.temperature_2m?.[i]),
@@ -197,18 +262,18 @@ export async function buildHistoricalExcel(opts: {
       num(hourly.wind_speed_10m?.[i]),
       num(hourly.wind_gusts_10m?.[i]),
       compass(hourly.wind_direction_10m?.[i]),
-      num(hourly.precipitation?.[i]),
-      num(hourly.cloud_cover?.[i]),
-      num(hourly.pressure_msl?.[i]),
     ];
+    if (withWaves) r.push(num(hourly.wave_height?.[i]));
+    r.push(num(hourly.precipitation?.[i]), num(hourly.cloud_cover?.[i]), num(hourly.pressure_msl?.[i]));
+    rows[i] = r;
   }
   ws.addRows(rows);
 
-  HEADERS.forEach((_, i) => {
+  headers.forEach((_, i) => {
     ws.getColumn(i + 1).width = i === 0 ? 22 : 15;
   });
-  ws.autoFilter = { from: { row: 6, column: 1 }, to: { row: 6 + n, column: HEADERS.length } };
-  if (n > 0) addZebra(ws, `A7:${String.fromCharCode(64 + HEADERS.length)}${6 + n}`, 0); // first data row white
+  ws.autoFilter = { from: { row: 6, column: 1 }, to: { row: 6 + n, column: headers.length } };
+  if (n > 0) addZebra(ws, `A7:${String.fromCharCode(64 + headers.length)}${6 + n}`, 0); // first data row white
 
   const buffer = await wb.xlsx.writeBuffer();
   return new Blob([buffer], {
@@ -262,7 +327,7 @@ function addZebra(ws: import("exceljs").Worksheet, ref: string, shadedParity: 0 
 
 async function addSummarySheets(
   wb: Workbook,
-  o: { locationName: string; lat: number; lon: number; start: string; end: string; hourly: ArchiveSeries; thresholds: Thresholds }
+  o: { locationName: string; lat: number; lon: number; start: string; end: string; hourly: ArchiveSeries; thresholds: Thresholds; waves?: WaveInfo }
 ) {
   const { stats, months } = computeSummary(o.hourly, o.thresholds);
   const r1 = (v: number | null) => (v === null ? null : Math.round(v * 10) / 10);
@@ -328,6 +393,10 @@ async function addSummarySheets(
   );
   line("Wind speed - maximum (knots)", stats.windMax?.value ?? null, at(stats.windMax));
   line("Wind gust - maximum (knots)", stats.gustMax?.value ?? null, at(stats.gustMax));
+  if (stats.wave) {
+    line("Wave height Hs - average (m)", r1(stats.wave.avg));
+    line("Wave height Hs - maximum (m)", stats.wave.max?.value ?? null, at(stats.wave.max));
+  }
   line("Rain - total (mm)", r1(stats.rainTotal));
   line("Rain - maximum per hour (mm)", stats.rainMax?.value ?? null, at(stats.rainMax));
   line("Rainy hours (>= 0.1 mm/h)", stats.rainyHours);
@@ -342,6 +411,24 @@ async function addSummarySheets(
   lvl("Wind", o.thresholds.wind, stats.exceed.wind, "kt");
   lvl("Rain", o.thresholds.rain, stats.exceed.rain, "mm/h");
   lvl("Temperature", o.thresholds.temp, stats.exceed.temp, "°C");
+  if (stats.wave && o.thresholds.wave) {
+    const wv = stats.wave;
+    o.thresholds.wave.forEach((v, k) =>
+      line(
+        `Wave Hs level ${k + 1} (>= ${v.toFixed(1)} m)`,
+        wv.exceed[k],
+        wv.hours ? `${((wv.exceed[k] / wv.hours) * 100).toFixed(1)} % of hours with wave data` : ""
+      )
+    );
+  }
+  if (o.waves) {
+    const note = ws.getCell(row, 1);
+    note.value = stats.wave
+      ? `Waves: ERA5-Ocean reanalysis via Open-Meteo, ~0.5° grid${o.waves.grid ? ` (grid point ${o.waves.grid.lat.toFixed(2)}, ${o.waves.grid.lon.toFixed(2)})` : ""}. Modelled, not measured; storm peaks may be underestimated.`
+      : `Waves not included: ${o.waves.problem ?? "no data"}.`;
+    note.font = { italic: true, color: { argb: "FF6B7280" } };
+    row++;
+  }
 
   row++;
   section("Wind direction frequency", ["", "Hours", "Share of windy hours", "Avg speed (kt)"]);
@@ -350,7 +437,7 @@ async function addSummarySheets(
 
   row += 1;
   // Chart images (drawn in the browser; absent when generated without a DOM).
-  for (const spec of buildChartSpecs(months)) {
+  for (const spec of buildChartSpecs(months, !!stats.wave)) {
     const png = await renderChartPng(spec);
     if (!png) continue;
     const id = wb.addImage({ buffer: png as unknown as ArrayBuffer, extension: "png" });
@@ -368,6 +455,7 @@ async function addSummarySheets(
   const heads = [
     "Month", "Hours", "Avg Temp (°C)", "Min Temp (°C)", "Max Temp (°C)", "Avg Humidity (%)",
     "Avg Wind (knots)", "Max Gust (knots)", "Dominant Wind Dir", "Dominant Dir (%)",
+    ...(stats.wave ? ["Avg Hs (m)", "Max Hs (m)"] : []),
     "Total Rain (mm)", "Rainy Hours", "Thunderstorm Hours",
   ];
   heads.forEach((h, i) => {
@@ -384,6 +472,7 @@ async function addSummarySheets(
       m.hours,
       r1(m.tempAvg), r1(m.tempMin), r1(m.tempMax), r1(m.humidityAvg),
       r1(m.windAvg), r1(m.gustMax), m.dominantDir ?? "", r1(m.dominantDirPct),
+      ...(stats.wave ? [r1(m.waveAvg), r1(m.waveMax)] : []),
       r1(m.rainTotal), m.rainyHours, m.thunderHours,
     ])
   );
