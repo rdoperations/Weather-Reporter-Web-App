@@ -55,7 +55,7 @@ export default function Home() {
     weatherData && weatherData.length > 0 ? weatherData[0] : null;
 
   return (
-    <main className="min-h-screen text-[#d1d9e6] p-4 sm:p-6 md:p-10 max-w-[1400px] mx-auto space-y-6">
+    <main className="w-full min-h-screen text-[#d1d9e6] p-4 sm:p-6 md:p-10 max-w-[1400px] mx-auto space-y-6">
       <ScrollChrome />
       <AppHeader timezone={locationInfo?.timezone} />
 

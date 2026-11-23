@@ -31,7 +31,7 @@ export default function ForecastTable({ weatherData, fetchedSource }: ForecastTa
       </div>
 
       {/* Custom Table with Streamlit Exact Styling */}
-      <div className="max-h-[500px] overflow-y-auto rounded-xl border border-white/[0.08] bg-white/[0.02] backdrop-blur-md">
+      <div className="max-h-[500px] overflow-auto overscroll-x-contain rounded-xl border border-white/[0.08] bg-white/[0.02] backdrop-blur-md">
         <table className="w-full text-left font-mono text-xs text-[#d1d9e6]">
           <thead className="sticky top-0 bg-[#0072ff]/20 text-[#e8f0fe] font-sans font-semibold text-[13px] uppercase tracking-wider backdrop-blur-md z-10 shadow-sm border-b border-white/[0.06]">
             <tr>

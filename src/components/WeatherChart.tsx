@@ -566,11 +566,11 @@ function TimeSeriesChart({ rows, tab }: { rows: Row[]; tab: TabDef }) {
         </div>
       </div>
 
-      <div className="relative w-full overflow-hidden">
+      <div className="relative w-full overflow-x-auto overflow-y-hidden">
         <svg
           viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-          className="w-full h-auto select-none"
-          style={{ touchAction: "pan-y" }}
+          className="w-full h-auto select-none max-sm:min-w-[620px] max-sm:[&_text[font-size='11']]:text-[14px]"
+          style={{ touchAction: "pan-x pan-y" }}
           role="img"
           aria-label={`${title} chart`}
           onPointerMove={handlePointer}
