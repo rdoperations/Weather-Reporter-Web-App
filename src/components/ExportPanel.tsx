@@ -156,7 +156,7 @@ export default function ExportPanel({
           // Offshore sites have no onshore wind levels; keep the generic 20/30/40 kt scale there.
           wind: profile === "offshore" ? [20, 30, 40] : levelsOf("wind_land", [15, 20, 25]),
           rain: levelsOf("rain_land", [2.5, 5, 7.5]),
-          temp: profile === "offshore" ? levelsOf("heat_offshore", [28, 30, 32]) : levelsOf("heat", [35, 37, 40]),
+          temp: profile === "offshore" ? levelsOf("heat_offshore", [30, 33, 35]) : levelsOf("heat", [35, 37, 40]),
         },
       });
       downloadBlob(

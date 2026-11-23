@@ -255,9 +255,9 @@ export const DEFAULT_LIMITS: ActivityLimit[] = [
     hsStop: null,
     rainSensitive: false,
     thunderSensitive: false,
-    levels: { key: "temperature", label: "Temp", unit: "°C", values: [28, 30, 32] },
+    levels: { key: "temperature", label: "Temp", unit: "°C", values: [30, 33, 35] },
     notes: [
-      "Offshore heat levels: level 1 ≥ 28 °C, level 2 ≥ 30 °C, level 3 ≥ 32 °C.",
+      "Offshore heat levels: level 1 ≥ 30 °C, level 2 ≥ 33 °C, level 3 ≥ 35 °C.",
       "OpenWeatherMap reports feels-like temperature; Open-Meteo and MET Norway report air temperature.",
     ],
   },
