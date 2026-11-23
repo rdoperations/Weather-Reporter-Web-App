@@ -11,6 +11,24 @@ export interface Thresholds {
 interface Extreme {
   value: number;
   time: string;
+  /** Compass direction the wind came from at that moment (wind extremes only). */
+  dir?: string;
+}
+
+export const COMPASS = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+export const compassOf = (deg: number) => COMPASS[Math.floor(deg / 22.5 + 0.5) % 16];
+/** Wind rose speed classes (kt): < 10, 10–20, 20–30, ≥ 30. */
+export const ROSE_BINS = [10, 20, 30];
+const binOf = (kt: number) => (kt < ROSE_BINS[0] ? 0 : kt < ROSE_BINS[1] ? 1 : kt < ROSE_BINS[2] ? 2 : 3);
+
+export interface WindDirStats {
+  /** Hours counted (valid direction and wind >= 1 kt). */
+  hours: number;
+  dominant: { dir: string; hours: number; pct: number } | null;
+  /** Speed-weighted vector mean direction, degrees (0-360) or null when undefined. */
+  vectorMeanDeg: number | null;
+  /** Per compass sector: hours, share of counted hours, mean speed, hours per speed class. */
+  sectors: { dir: string; hours: number; pct: number; avgSpeed: number | null; bins: number[] }[];
 }
 
 export interface Stats {
@@ -26,6 +44,7 @@ export interface Stats {
   thunderHours: number;
   pressureAvg: number | null;
   exceed: { wind: number[]; rain: number[]; temp: number[] };
+  windDir: WindDirStats;
 }
 
 export interface MonthRow {
@@ -40,6 +59,8 @@ export interface MonthRow {
   rainTotal: number;
   rainyHours: number;
   thunderHours: number;
+  dominantDir: string | null;
+  dominantDirPct: number | null;
 }
 
 const ok = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
@@ -58,10 +79,55 @@ class Acc {
   }
 }
 
-function track(cur: Extreme | null, v: unknown, time: string, bigger: boolean): Extreme | null {
+function track(cur: Extreme | null, v: unknown, time: string, bigger: boolean, dir?: string): Extreme | null {
   if (!ok(v)) return cur;
-  if (cur === null || (bigger ? v > cur.value : v < cur.value)) return { value: v, time };
+  if (cur === null || (bigger ? v > cur.value : v < cur.value)) return { value: v, time, dir };
   return cur;
+}
+
+/** Wind-direction tally for a set of hours (all of them, or one month). */
+class DirAcc {
+  hours: number[] = new Array(16).fill(0);
+  speed: number[] = new Array(16).fill(0);
+  bins: number[][] = Array.from({ length: 16 }, () => [0, 0, 0, 0]);
+  sx = 0; // speed-weighted unit vector components
+  sy = 0;
+  add(deg: unknown, kt: unknown) {
+    if (!ok(deg) || !ok(kt) || kt < 1) return; // calm / missing: direction is meaningless
+    const k = Math.floor(deg / 22.5 + 0.5) % 16;
+    this.hours[k]++;
+    this.speed[k] += kt;
+    this.bins[k][binOf(kt)]++;
+    const r = (deg * Math.PI) / 180;
+    this.sx += kt * Math.sin(r);
+    this.sy += kt * Math.cos(r);
+  }
+  get total() {
+    return this.hours.reduce((a, b) => a + b, 0);
+  }
+  get dominant() {
+    const t = this.total;
+    if (!t) return null;
+    const k = this.hours.indexOf(Math.max(...this.hours));
+    return { dir: COMPASS[k], hours: this.hours[k], pct: (this.hours[k] / t) * 100 };
+  }
+  stats(): WindDirStats {
+    const t = this.total;
+    const mag = Math.hypot(this.sx, this.sy);
+    const deg = t && mag > 1e-9 ? ((Math.atan2(this.sx, this.sy) * 180) / Math.PI + 360) % 360 : null;
+    return {
+      hours: t,
+      dominant: this.dominant,
+      vectorMeanDeg: deg,
+      sectors: COMPASS.map((dir, k) => ({
+        dir,
+        hours: this.hours[k],
+        pct: t ? (this.hours[k] / t) * 100 : 0,
+        avgSpeed: this.hours[k] ? this.speed[k] / this.hours[k] : null,
+        bins: this.bins[k],
+      })),
+    };
+  }
 }
 
 const fmtTime = (t: string) => t.replace("T", " ");
@@ -73,7 +139,8 @@ export function computeSummary(h: ArchiveSeries, th: Thresholds): { stats: Stats
   let rainTotal = 0, rainyHours = 0, thunderHours = 0;
   const exceed = { wind: [0, 0, 0], rain: [0, 0, 0], temp: [0, 0, 0] };
 
-  type M = { n: number; temp: Acc; hum: Acc; wind: Acc; tMin: number | null; tMax: number | null; gust: number | null; rain: number; rainy: number; thunder: number };
+  const dirAll = new DirAcc();
+  type M = { n: number; temp: Acc; hum: Acc; wind: Acc; tMin: number | null; tMax: number | null; gust: number | null; rain: number; rainy: number; thunder: number; dir: DirAcc };
   const byMonth = new Map<string, M>();
 
   for (let i = 0; i < h.time.length; i++) {
@@ -83,14 +150,18 @@ export function computeSummary(h: ArchiveSeries, th: Thresholds): { stats: Stats
     const key = h.time[i].slice(0, 7);
     let m = byMonth.get(key);
     if (!m) {
-      m = { n: 0, temp: new Acc(), hum: new Acc(), wind: new Acc(), tMin: null, tMax: null, gust: null, rain: 0, rainy: 0, thunder: 0 };
+      m = { n: 0, temp: new Acc(), hum: new Acc(), wind: new Acc(), tMin: null, tMax: null, gust: null, rain: 0, rainy: 0, thunder: 0, dir: new DirAcc() };
       byMonth.set(key, m);
     }
     m.n++;
+    const D = h.wind_direction_10m?.[i];
+    const dirName = ok(D) ? compassOf(D) : undefined;
+    dirAll.add(D, W);
+    m.dir.add(D, W);
     temp.add(T); hum.add(H); wind.add(W); press.add(P);
     m.temp.add(T); m.hum.add(H); m.wind.add(W);
     tMax = track(tMax, T, t, true); tMin = track(tMin, T, t, false);
-    wMax = track(wMax, W, t, true); gMax = track(gMax, G, t, true); rMax = track(rMax, R, t, true);
+    wMax = track(wMax, W, t, true, dirName); gMax = track(gMax, G, t, true, dirName); rMax = track(rMax, R, t, true);
     if (ok(T)) {
       m.tMin = m.tMin === null ? T : Math.min(m.tMin, T);
       m.tMax = m.tMax === null ? T : Math.max(m.tMax, T);
@@ -120,6 +191,7 @@ export function computeSummary(h: ArchiveSeries, th: Thresholds): { stats: Stats
     thunderHours,
     pressureAvg: press.avg,
     exceed,
+    windDir: dirAll.stats(),
   };
   const months: MonthRow[] = [...byMonth.entries()]
     .sort(([a], [b]) => (a < b ? -1 : 1))
@@ -135,6 +207,8 @@ export function computeSummary(h: ArchiveSeries, th: Thresholds): { stats: Stats
       rainTotal: m.rain,
       rainyHours: m.rainy,
       thunderHours: m.thunder,
+      dominantDir: m.dir.dominant?.dir ?? null,
+      dominantDirPct: m.dir.dominant?.pct ?? null,
     }));
   return { stats, months };
 }
@@ -264,6 +338,96 @@ export async function renderChartPng(spec: ChartSpec): Promise<Uint8Array | null
       }
     }
   }
+
+  const blob: Blob | null = await new Promise((res) => canvas.toBlob(res, "image/png"));
+  return blob ? new Uint8Array(await blob.arrayBuffer()) : null;
+}
+
+export const ROSE_W = 560;
+export const ROSE_H = 440;
+const ROSE_COLORS = ["#93c5fd", "#3b82f6", "#f59e0b", "#ef4444"];
+const ROSE_LABELS = ["< 10 kt", "10 – 20 kt", "20 – 30 kt", "≥ 30 kt"];
+
+/** Wind rose: share of hours per compass sector (wind coming FROM), stacked by speed class. */
+export async function renderWindRosePng(w: WindDirStats): Promise<Uint8Array | null> {
+  if (typeof document === "undefined" || w.hours === 0) return null;
+  const scale = 2;
+  const canvas = document.createElement("canvas");
+  canvas.width = ROSE_W * scale;
+  canvas.height = ROSE_H * scale;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.scale(scale, scale);
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, ROSE_W, ROSE_H);
+
+  ctx.fillStyle = "#1f2937";
+  ctx.font = "bold 15px Arial, sans-serif";
+  ctx.textAlign = "left";
+  ctx.fillText("Wind rose (direction wind blows from, % of hours)", 16, 24);
+
+  const cx = 220, cy = 245, R = 150;
+  const maxPct = Math.max(...w.sectors.map((s) => s.pct), 1);
+  const step = niceStep(maxPct / 4);
+  const top = Math.ceil(maxPct / step) * step;
+  const rad = (pct: number) => (pct / top) * R;
+
+  // rings + spokes
+  ctx.lineWidth = 1;
+  ctx.font = "10px Arial, sans-serif";
+  for (let v = step; v <= top + 1e-9; v += step) {
+    ctx.strokeStyle = "#e5e7eb";
+    ctx.beginPath();
+    ctx.arc(cx, cy, rad(v), 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = "#9ca3af";
+    ctx.textAlign = "left";
+    ctx.fillText(`${Math.round(v * 10) / 10}%`, cx + 3, cy - rad(v) + 11);
+  }
+  ctx.textAlign = "center";
+  w.sectors.forEach((s, k) => {
+    const a = (k * 22.5 * Math.PI) / 180;
+    ctx.strokeStyle = "#e5e7eb";
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + Math.sin(a) * R, cy - Math.cos(a) * R);
+    ctx.stroke();
+    ctx.fillStyle = k % 2 === 0 ? "#374151" : "#9ca3af";
+    ctx.font = k % 2 === 0 ? "bold 12px Arial, sans-serif" : "10px Arial, sans-serif";
+    ctx.fillText(s.dir, cx + Math.sin(a) * (R + 16), cy - Math.cos(a) * (R + 16) + 4);
+  });
+
+  // stacked petals (canvas angle 0 = east, so rotate by -90°)
+  const half = (22.5 * 0.42 * Math.PI) / 180;
+  w.sectors.forEach((s, k) => {
+    const mid = (k * 22.5 * Math.PI) / 180 - Math.PI / 2;
+    let cum = 0;
+    s.bins.forEach((hrs, b) => {
+      if (!hrs) return;
+      const inner = rad(cum);
+      cum += (hrs / w.hours) * 100;
+      const outer = rad(cum);
+      ctx.fillStyle = ROSE_COLORS[b];
+      ctx.beginPath();
+      ctx.arc(cx, cy, outer, mid - half, mid + half);
+      ctx.arc(cx, cy, inner, mid + half, mid - half, true);
+      ctx.closePath();
+      ctx.fill();
+    });
+  });
+
+  // legend
+  ctx.textAlign = "left";
+  ctx.font = "12px Arial, sans-serif";
+  ROSE_LABELS.forEach((lab, i) => {
+    ctx.fillStyle = ROSE_COLORS[i];
+    ctx.fillRect(420, 150 + i * 24, 13, 13);
+    ctx.fillStyle = "#374151";
+    ctx.fillText(lab, 440, 161 + i * 24);
+  });
+  ctx.fillStyle = "#6b7280";
+  ctx.font = "11px Arial, sans-serif";
+  ctx.fillText("Calm hours (< 1 kt) excluded", 400, 270);
 
   const blob: Blob | null = await new Promise((res) => canvas.toBlob(res, "image/png"));
   return blob ? new Uint8Array(await blob.arrayBuffer()) : null;

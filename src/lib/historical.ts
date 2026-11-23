@@ -5,9 +5,13 @@ import {
   buildChartSpecs,
   CHART_H,
   CHART_W,
+  compassOf,
   computeSummary,
   monthLabel,
   renderChartPng,
+  renderWindRosePng,
+  ROSE_H,
+  ROSE_W,
   type Thresholds,
 } from "./historicalSummary";
 
@@ -164,23 +168,13 @@ export async function buildHistoricalExcel(opts: {
     views: [{ state: "frozen", ySplit: 6 }], // keep the header row visible while scrolling
   });
 
-  const infoStyle = {
-    font: { bold: true },
-    alignment: { horizontal: "center" as const },
-    fill: { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFD7E4BC" } },
-  };
   const info: [string, string | null][] = [
     ["Historical Weather Report", null],
     ["Location:", locationName],
     ["Coordinates:", `Lat: ${lat}, Lon: ${lon}`],
     ["Period:", `${start} to ${end}`],
   ];
-  info.forEach(([a, b], i) => {
-    const row = ws.getRow(i + 1);
-    row.getCell(1).value = a;
-    Object.assign(row.getCell(1), infoStyle);
-    if (b !== null) row.getCell(2).value = b;
-  });
+  info.forEach(([a, b], i) => styleInfoRow(ws, i + 1, a, b, 4));
 
   const header = ws.getRow(6);
   HEADERS.forEach((h, i) => {
@@ -188,7 +182,7 @@ export async function buildHistoricalExcel(opts: {
     c.value = h;
     c.font = { bold: true, color: { argb: "FFFFFFFF" } };
     c.alignment = { horizontal: "center" };
-    c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4F81BD" } };
+    c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF0E8FA3" } };
   });
 
   const n = hourly.time.length;
@@ -211,9 +205,10 @@ export async function buildHistoricalExcel(opts: {
   ws.addRows(rows);
 
   HEADERS.forEach((_, i) => {
-    ws.getColumn(i + 1).width = i === 0 ? 20 : 15;
+    ws.getColumn(i + 1).width = i === 0 ? 22 : 15;
   });
   ws.autoFilter = { from: { row: 6, column: 1 }, to: { row: 6 + n, column: HEADERS.length } };
+  if (n > 0) addZebra(ws, `A7:${String.fromCharCode(64 + HEADERS.length)}${6 + n}`, 0); // first data row white
 
   const buffer = await wb.xlsx.writeBuffer();
   return new Blob([buffer], {
@@ -225,9 +220,45 @@ export async function buildHistoricalExcel(opts: {
 
 type Workbook = import("exceljs").Workbook;
 
-const GREEN = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFD7E4BC" } };
-const BLUE = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FF4F81BD" } };
-const GREY = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFF2F2F2" } };
+// Logo colours: green labels, orange value cells (orange text-size +2 over the default 11 pt).
+const LOGO_GREEN = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FF0F9748" } };
+const LOGO_ORANGE = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFFDB913" } };
+
+/** Title block row (rows 1-4 of Summary and Historical Data): label in A, value in B, orange B:C. */
+function styleInfoRow(ws: import("exceljs").Worksheet, row: number, label: string, value: string | null, lastCol = 3) {
+  const a = ws.getCell(row, 1);
+  a.value = label;
+  a.font = { bold: true, color: { argb: "FFFFFFFF" } };
+  a.alignment = { horizontal: "center" };
+  a.fill = LOGO_GREEN;
+  const b = ws.getCell(row, 2);
+  if (value !== null) b.value = value.toUpperCase();
+  b.font = { bold: true, size: 13 };
+  b.fill = LOGO_ORANGE;
+  for (let col = 3; col <= lastCol; col++) ws.getCell(row, col).fill = LOGO_ORANGE;
+}
+const BLUE = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FF0E8FA3" } };
+// Light cyan for every second data row.
+const ZEBRA_ARGB = "FFD9F3F7";
+const ZEBRA = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: ZEBRA_ARGB } };
+
+/**
+ * Shades even rows below the header with one conditional-format rule: the file stays small
+ * (no per-cell styles) and the banding survives sorting and filtering.
+ */
+function addZebra(ws: import("exceljs").Worksheet, ref: string, shadedParity: 0 | 1) {
+  ws.addConditionalFormatting({
+    ref,
+    rules: [
+      {
+        type: "expression",
+        formulae: [`MOD(ROW(),2)=${shadedParity}`],
+        priority: 1,
+        style: { fill: { type: "pattern", pattern: "solid", bgColor: { argb: ZEBRA_ARGB } } },
+      },
+    ],
+  });
+}
 
 async function addSummarySheets(
   wb: Workbook,
@@ -243,14 +274,7 @@ async function addSummarySheets(
   ws.getColumn(3).width = 26;
   ws.getColumn(4).width = 16;
 
-  const title = (row: number, text: string, value?: string) => {
-    const c = ws.getCell(row, 1);
-    c.value = text;
-    c.font = { bold: true };
-    c.alignment = { horizontal: "center" };
-    c.fill = GREEN;
-    if (value !== undefined) ws.getCell(row, 2).value = value;
-  };
+  const title = (row: number, text: string, value?: string) => styleInfoRow(ws, row, text, value ?? null);
   title(1, "Historical Weather Summary");
   title(2, "Location:", o.locationName);
   title(3, "Coordinates:", `Lat: ${o.lat}, Lon: ${o.lon}`);
@@ -265,18 +289,24 @@ async function addSummarySheets(
       c.alignment = { horizontal: "center" };
       c.fill = BLUE;
     });
+    band = 0;
     row++;
   };
-  const line = (label: string, value: number | string | null, extra = "") => {
-    ws.getCell(row, 1).value = label;
-    ws.getCell(row, 1).fill = GREY;
-    const v = ws.getCell(row, 2);
-    v.value = value === null ? "" : value;
-    v.alignment = { horizontal: "right" };
-    ws.getCell(row, 3).value = extra;
+  let band = 0; // alternate-row shading, restarted for every table
+  const line = (label: string, value: number | string | null, extra: string | number = "", extra2?: string | number) => {
+    const cols: (string | number | null)[] = [label, value === null ? "" : value, extra];
+    if (extra2 !== undefined) cols.push(extra2);
+    cols.forEach((val, i) => {
+      const c = ws.getCell(row, i + 1);
+      c.value = val;
+      c.alignment = { horizontal: i === 1 ? "right" : i >= 2 ? "center" : "left" };
+      if (band % 2 === 1) c.fill = ZEBRA;
+    });
+    band++;
     row++;
   };
-  const at = (e: { value: number; time: string } | null) => (e ? `at ${e.time}` : "");
+  const at = (e: { value: number; time: string; dir?: string } | null) =>
+    e ? `at ${e.time}${e.dir ? ` (from ${e.dir})` : ""}` : "";
 
   section("Key statistics", ["", "Value", "When"]);
   line("Hours of data", stats.hours);
@@ -285,6 +315,17 @@ async function addSummarySheets(
   line("Temperature - minimum (°C)", stats.temp.min?.value ?? null, at(stats.temp.min));
   line("Humidity - average (%)", r1(stats.humidityAvg));
   line("Wind speed - average (knots)", r1(stats.windAvg));
+  const wd = stats.windDir;
+  line(
+    "Wind direction - dominant (from)",
+    wd.dominant ? wd.dominant.dir : null,
+    wd.dominant ? `${wd.dominant.pct.toFixed(1)} % of windy hours` : ""
+  );
+  line(
+    "Wind direction - vector mean (°)",
+    wd.vectorMeanDeg === null ? null : Math.round(wd.vectorMeanDeg),
+    wd.vectorMeanDeg === null ? "" : compassOf(wd.vectorMeanDeg)
+  );
   line("Wind speed - maximum (knots)", stats.windMax?.value ?? null, at(stats.windMax));
   line("Wind gust - maximum (knots)", stats.gustMax?.value ?? null, at(stats.gustMax));
   line("Rain - total (mm)", r1(stats.rainTotal));
@@ -302,6 +343,11 @@ async function addSummarySheets(
   lvl("Rain", o.thresholds.rain, stats.exceed.rain, "mm/h");
   lvl("Temperature", o.thresholds.temp, stats.exceed.temp, "°C");
 
+  row++;
+  section("Wind direction frequency", ["", "Hours", "Share of windy hours", "Avg speed (kt)"]);
+  for (const s of wd.sectors) line(s.dir, s.hours, wd.hours ? `${s.pct.toFixed(1)} %` : "", s.avgSpeed === null ? "" : r1(s.avgSpeed) ?? "");
+  line("Windy hours counted (>= 1 kt)", wd.hours);
+
   row += 1;
   // Chart images (drawn in the browser; absent when generated without a DOM).
   for (const spec of buildChartSpecs(months)) {
@@ -311,12 +357,18 @@ async function addSummarySheets(
     ws.addImage(id, { tl: { col: 0, row: row - 1 }, ext: { width: CHART_W, height: CHART_H } });
     row += Math.ceil(CHART_H / 20) + 1;
   }
+  const rose = await renderWindRosePng(wd);
+  if (rose) {
+    const id = wb.addImage({ buffer: rose as unknown as ArrayBuffer, extension: "png" });
+    ws.addImage(id, { tl: { col: 0, row: row - 1 }, ext: { width: ROSE_W, height: ROSE_H } });
+  }
 
   // ── Monthly ──
   const wm = wb.addWorksheet("Monthly", { views: [{ state: "frozen", ySplit: 1 }] });
   const heads = [
     "Month", "Hours", "Avg Temp (°C)", "Min Temp (°C)", "Max Temp (°C)", "Avg Humidity (%)",
-    "Avg Wind (knots)", "Max Gust (knots)", "Total Rain (mm)", "Rainy Hours", "Thunderstorm Hours",
+    "Avg Wind (knots)", "Max Gust (knots)", "Dominant Wind Dir", "Dominant Dir (%)",
+    "Total Rain (mm)", "Rainy Hours", "Thunderstorm Hours",
   ];
   heads.forEach((h, i) => {
     const c = wm.getCell(1, i + 1);
@@ -331,7 +383,9 @@ async function addSummarySheets(
       monthLabel(m.month).replace(" ", " 20"),
       m.hours,
       r1(m.tempAvg), r1(m.tempMin), r1(m.tempMax), r1(m.humidityAvg),
-      r1(m.windAvg), r1(m.gustMax), r1(m.rainTotal), m.rainyHours, m.thunderHours,
+      r1(m.windAvg), r1(m.gustMax), m.dominantDir ?? "", r1(m.dominantDirPct),
+      r1(m.rainTotal), m.rainyHours, m.thunderHours,
     ])
   );
+  if (months.length > 0) addZebra(wm, `A2:${String.fromCharCode(64 + heads.length)}${1 + months.length}`, 1);
 }

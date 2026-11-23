@@ -174,6 +174,7 @@ export default function Home() {
               locationName={selected.name}
               fetchedSource={fetchedSource}
               locationInfo={locationInfo}
+              profile={profile}
             />
           </Reveal>
         </>

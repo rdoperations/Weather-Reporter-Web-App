@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { DEFAULT_LIMITS } from "@/config/operatingLimits";
+import { DEFAULT_LIMITS, type LocationProfile } from "@/config/operatingLimits";
 import { errorMessage } from "@/lib/units";
 import { buildHistoricalExcel, EXCEL_VARIABLES, fetchArchive } from "@/lib/historical";
 import type { LocationInfo } from "@/types/weather";
@@ -28,6 +28,8 @@ interface ExportPanelProps {
   /** Source the on-screen forecast came from (the PDF is generated from the same source). */
   fetchedSource: string;
   locationInfo: LocationInfo | null;
+  /** Selects which alert thresholds the Excel summary counts against. */
+  profile?: LocationProfile;
 }
 
 export default function ExportPanel({
@@ -35,6 +37,7 @@ export default function ExportPanel({
   lon,
   locationName,
   fetchedSource,
+  profile = "onshore",
 }: ExportPanelProps) {
   // Forecast PDF
   const [pdfLang, setPdfLang] = useState<"en" | "vi">("en");
@@ -104,12 +107,6 @@ export default function ExportPanel({
     return "";
   };
 
-  const fileTimestamp = () => {
-    const now = new Date();
-    const p2 = (n: number) => n.toString().padStart(2, "0");
-    return `${now.getFullYear()}${p2(now.getMonth() + 1)}${p2(now.getDate())}_${p2(now.getHours())}${p2(now.getMinutes())}`;
-  };
-
   const safeName = () => locationName.replace(/[^a-zA-Z0-9]/g, "_");
 
   const downloadBlob = (blob: Blob, filename: string) => {
@@ -123,7 +120,7 @@ export default function ExportPanel({
     setTimeout(() => window.URL.revokeObjectURL(objUrl), 1000);
   };
 
-  // Shared by the Excel and CSV downloads: validates, fetches (in chunks) and reports progress.
+  // Excel download: validates, fetches (in chunks) and reports progress.
   const runHistorical = async (variables: string[], build: (h: Awaited<ReturnType<typeof fetchArchive>>) => Promise<void>) => {
     const rangeErr = histRangeError();
     if (rangeErr) {
@@ -156,9 +153,10 @@ export default function ExportPanel({
         end: histEndDate,
         hourly,
         thresholds: {
-          wind: levelsOf("wind_land", [20, 30, 40]),
+          // Offshore sites have no onshore wind levels; keep the generic 20/30/40 kt scale there.
+          wind: profile === "offshore" ? [20, 30, 40] : levelsOf("wind_land", [15, 20, 25]),
           rain: levelsOf("rain_land", [2.5, 5, 7.5]),
-          temp: levelsOf("heat", [35, 37, 40]),
+          temp: profile === "offshore" ? levelsOf("heat_offshore", [28, 30, 32]) : levelsOf("heat", [35, 37, 40]),
         },
       });
       downloadBlob(
@@ -166,43 +164,6 @@ export default function ExportPanel({
         `Historical_Weather_${safeName()}_${histStartDate.replace(/-/g, "")}_to_${histEndDate.replace(/-/g, "")}.xlsx`
       );
     });
-
-  // Historical CSV export
-  const handleExportHistoricalCsv = () =>
-    runHistorical(
-      [
-        "temperature_2m",
-        "relative_humidity_2m",
-        "dew_point_2m",
-        "precipitation",
-        "surface_pressure",
-        "cloud_cover",
-        "wind_speed_10m",
-        "wind_direction_10m",
-        "wind_gusts_10m",
-      ],
-      async ({ hourly }) => {
-        const cols: [string, string][] = [
-          ["time", "time"],
-          ["temperature_2m", "temperature_2m (°C)"],
-          ["relative_humidity_2m", "relative_humidity_2m (%)"],
-          ["dew_point_2m", "dew_point_2m (°C)"],
-          ["precipitation", "precipitation (mm)"],
-          ["surface_pressure", "surface_pressure (hPa)"],
-          ["cloud_cover", "cloudcover (%)"],
-          ["wind_speed_10m", "wind_speed_10m (kn)"],
-          ["wind_direction_10m", "wind_direction_10m (°)"],
-          ["wind_gusts_10m", "wind_gusts_10m (kn)"],
-        ];
-        const header = cols.map(([, label]) => label).join(",");
-        const rows = hourly.time.map((_: string, i: number) =>
-          cols.map(([key]) => hourly[key]?.[i] ?? "").join(",")
-        );
-        // BOM so Excel opens the "°" characters correctly.
-        const blob = new Blob(["\uFEFF" + [header, ...rows].join("\n")], { type: "text/csv;charset=utf-8" });
-        downloadBlob(blob, `Historical_Weather_${safeName()}_${fileTimestamp()}.csv`);
-      }
-    );
 
   return (
     <section>
@@ -276,7 +237,7 @@ export default function ExportPanel({
           >
             {exportingPdf
               ? "Generating PDF Report..."
-              : `Download ${pdfLang === "vi" ? "Vietnamese" : "English"} PDF`}
+              : `Download Weather Forecast Report - ${pdfLang === "vi" ? "VNM" : "ENG"}`}
           </button>
         </div>
         
@@ -333,22 +294,13 @@ export default function ExportPanel({
             </p>
           </div>
 
-          <div className="flex gap-3 mt-auto">
-            <button
-              onClick={handleExportHistoricalExcel}
-              disabled={exportingHist || !histStartDate || !histEndDate}
-              className="btn-primary flex-1 py-3 text-sm disabled:opacity-50"
-            >
-              {exportingHist ? histProgress || "Working..." : "Download Excel"}
-            </button>
-            <button
-              onClick={handleExportHistoricalCsv}
-              disabled={exportingHist || !histStartDate || !histEndDate}
-              className="btn-primary flex-1 py-3 text-sm disabled:opacity-50"
-            >
-              {exportingHist ? "Working..." : "Download CSV"}
-            </button>
-          </div>
+          <button
+            onClick={handleExportHistoricalExcel}
+            disabled={exportingHist || !histStartDate || !histEndDate}
+            className="btn-primary w-full py-3 text-sm disabled:opacity-50 mt-auto"
+          >
+            {exportingHist ? histProgress || "Working..." : "Download Historical Weather Report"}
+          </button>
         </div>
       </div>
     </section>
