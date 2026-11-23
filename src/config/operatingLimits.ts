@@ -16,6 +16,7 @@ export type ActivityIcon =
   | "crane"
   | "helicopter"
   | "ship"
+  | "basket"
   | "lifebuoy"
   | "ladder"
   | "hardhat"
@@ -130,8 +131,8 @@ export const DEFAULT_LIMITS: ActivityLimit[] = [
   },
   {
     id: "pob_vessel",
-    label: "Personnel transfer with supply vessel",
-    icon: "ship",
+    label: "Personnel transfer with vessel",
+    icon: "basket",
     profiles: ["offshore"],
     windCaution: 20,
     windStop: 25,

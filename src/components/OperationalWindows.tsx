@@ -98,6 +98,25 @@ function CraneIcon({ size = 20 }: { size?: number }) {
   );
 }
 
+/** Personnel transfer basket: lifting ring, sling cone to a top ring, rope net and floating base ring. */
+function BasketIcon({ size = 20 }: { size?: number }) {
+  return (
+    <svg {...svgProps} width={size} height={size} aria-hidden="true">
+      <circle cx="12" cy="2.6" r="1.1" />
+      <path d="M12 3.7L7.8 7.8" />
+      <path d="M12 3.7l4.2 4.1" />
+      <ellipse cx="12" cy="8.4" rx="4.4" ry="1.3" />
+      <path d="M7.7 9.2L4.3 18.4" />
+      <path d="M16.3 9.2l3.4 9.2" />
+      <path d="M10.4 9.7L9.4 20.4" />
+      <path d="M13.6 9.7l1 10.7" />
+      <path d="M6.5 13.2h11" />
+      <path d="M5.6 16.2h12.8" />
+      <ellipse cx="12" cy="19" rx="8" ry="2.4" />
+    </svg>
+  );
+}
+
 function LadderIcon({ size = 20 }: { size?: number }) {
   return (
     <svg {...svgProps} width={size} height={size} aria-hidden="true">
@@ -118,6 +137,8 @@ function ActivityIconView({ icon }: { icon: ActivityIcon }) {
       return <Helicopter size={20} aria-hidden="true" />;
     case "ship":
       return <Ship size={20} aria-hidden="true" />;
+    case "basket":
+      return <BasketIcon />;
     case "lifebuoy":
       return <LifeBuoy size={20} aria-hidden="true" />;
     case "ladder":
